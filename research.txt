@@ -1,0 +1,1389 @@
+=== USER
+
+research into building an MCP server in Zig 0.14 from scratch (i.e, implementing everything from the ground up if necessary)
+
+here is the task for more context:
+
+"write me a complete MCP server (providing basic tools such as a calculator and a CLI/subprocess usage tool in zig 0.14
+
+implement everything from scratch, do not rely on any external libraries
+
+I want a minimal, POC binary application written in idiomatic zig"
+
+=== ASSISTANT
+
+Building an MCP Server in Zig 0.14 from Scratch
+
+1. Introduction to the Model Context Protocol (MCP)
+The Anthropic Model Context Protocol (MCP) has emerged as a pivotal open standard in the landscape of artificial intelligence, specifically designed to bridge the gap between large language models (LLMs) and the vast ecosystem of external data sources and tools. Introduced in late November 2024, MCP aims to resolve the challenges associated with integrating AI models with external systems by providing a standardized communication framework. This protocol enables AI applications, such as the Claude desktop app or IDE plugins, to connect with MCP servers that act as interfaces to various data repositories and functionalities. Anthropic envisions MCP as a collaborative, open-source project, encouraging developers to contribute to its growth and adoption.  
+
+A primary motivation behind MCP is to address the "MxN" integration problem. Traditionally, integrating M different LLMs with N different tools would necessitate M multiplied by N unique integration pathways. MCP simplifies this complexity by establishing a common protocol that both LLM vendors and tool builders can adhere to. This transforms the integration challenge into a much more manageable scenario where each tool and each model only needs to conform to the MCP standard once, allowing any compliant model to interact with any compliant tool.  
+
+The architecture of MCP follows a client-server model, comprising three main components: Hosts, Clients, and Servers. Hosts are the AI-powered applications or agent environments that users directly interact with, such as desktop applications or integrated development environment (IDE) extensions. A single host can establish connections with multiple MCP servers simultaneously. MCP Clients are managed by the host and act as intermediaries, with each client dedicated to communicating with a specific MCP server. This one-to-one relationship ensures security and provides a level of sandboxing. Clients are responsible for managing the connection lifecycle, discovering the capabilities of the server, forwarding requests, and handling responses. MCP Servers are external programs that implement the MCP standard to expose a defined set of capabilities. These capabilities typically include tools, access to data resources, and predefined prompts relevant to a particular domain. An MCP server might interface with a variety of backend systems, such as databases, cloud services, or other data sources.  
+
+Adopting MCP offers several key benefits for developers seeking to build innovative AI-powered applications. The standardized integration process simplifies development, allowing for consistent and reusable integrations instead of creating unique connections for every data source or tool. MCP also enhances interoperability between different AI models and external tools by providing a common communication language. Furthermore, it significantly improves the context awareness of AI models by enabling easy access to real-time data and specialized tools, leading to more intelligent and useful applications. The protocol supports two-way communication, allowing AI models to not only receive information but also to trigger actions in external systems. Security and control are also central to MCP's design, with the host application managing client and server connections and providing users with the ability to control what an AI assistant can connect to.  
+
+The design of MCP draws inspiration from the Language Server Protocol (LSP), a successful standard for integrating development tools with language servers. LSP has proven effective in standardizing communication for features like autocompletion and error checking across various editors. MCP aims to achieve a similar level of standardization for AI integrations, suggesting a well-considered and potentially robust architectural foundation. This indicates that MCP is built upon established principles of client-server communication and capability advertisement, reducing the risks associated with adopting a completely novel approach.  
+
+Anthropic has provided SDKs for MCP in popular languages such as Python and TypeScript, along with reference implementations. These resources aim to lower the barrier to entry for developers interested in adopting MCP and provide readily available tools for integration. However, the objective of this report is to delve into the intricacies of the protocol and construct an MCP server from the ground up using the Zig programming language. While existing SDKs offer convenience, building from scratch in Zig will provide a deeper understanding of the protocol's mechanics and allow for finer-grained control over the implementation, aligning with the user's specific request. The existence of SDKs in other languages can still serve as valuable references for comprehending the expected behavior and message formats within the MCP framework.  
+
+2. Setting Up the Development Environment for Zig 0.14
+To embark on the development of an MCP server in Zig, the initial step involves setting up the appropriate development environment. This necessitates the installation of the Zig 0.14.0 toolchain and the creation of a basic project structure.
+
+Zig version 0.14.0 was officially released on March 5, 2025. Prebuilt binaries for this version are available for a variety of operating systems, including Linux, macOS, and Windows, across different architectures such as x86_64 and aarch64. Installation can be performed manually by downloading the appropriate archive for the target platform from the official Zig website. Once downloaded, the archive should be extracted, and the location of the Zig executable should be added to the system's PATH environment variable to allow for easy access from the command line. Alternatively, on Windows, package managers like Chocolatey, Scoop, and Winget can be utilized to install Zig. After installation, it is crucial to verify that Zig has been installed correctly by opening a terminal or command prompt and executing the command zig version. This should output the installed version, confirming a successful setup.  
+
+With the Zig toolchain in place, the next step is to initialize a new project for the MCP server. This can be done using the command zig init-exe in the terminal. Navigating to the desired project directory and running this command will create a basic project structure. This structure includes a build.zig file, which serves as the build script for the project, and a src directory containing a main.zig file, which is the default entry point for the executable. The build.zig file contains a build function that is executed by the Zig build runner when the zig build command is invoked. This function defines how the Zig code is compiled and linked. The core logic of the MCP server will be implemented within the src/main.zig file or in other Zig files within the src directory, as the project grows in complexity.  
+
+A significant aspect of Zig 0.14.0 is the transition to "Unmanaged"-Style Containers within the standard library. This change means that containers like ArrayList no longer automatically manage their memory. Instead, developers are required to explicitly pass an allocator instance to any method that needs to allocate memory. While this might initially seem like an added burden, it provides several advantages. It offers greater transparency regarding memory allocation, as it becomes immediately clear which functions might allocate memory. Additionally, it can lead to a smaller memory footprint for container structs, potentially reducing overall memory usage, especially in scenarios with many container instances. This approach aligns with Zig's core philosophy of providing developers with explicit control over system resources, including memory.  
+
+The move to unmanaged containers in Zig 0.14.0 necessitates a heightened awareness of memory management throughout the development of the MCP server. Every data structure and operation that involves dynamic memory allocation, such as handling JSON messages or processing network data, will require careful consideration of where the memory is allocated from and when it should be deallocated. Unlike languages with automatic garbage collection, Zig requires manual memory management, and the explicit passing of allocators in unmanaged containers underscores this responsibility. When building the MCP server, decisions will need to be made regarding which allocator to use for different parts of the application, such as the std.heap.page_allocator for general-purpose allocation or the std.heap.ArenaAllocator for managing memory within a specific scope. Ensuring that memory allocated using these allocators is properly freed when it is no longer needed will be crucial to prevent memory leaks and maintain the stability of the server. This will be particularly relevant when dealing with data received from network connections and when parsing JSON messages, as these operations often involve dynamic memory allocation to handle variable-sized data.
+
+The Zig build system, configured by the build.zig file, is an integral component of the development environment. A thorough understanding of how to manage dependencies, define build steps, and execute the application using zig build commands is essential for the successful development and testing of the MCP server. The build.zig file not only orchestrates the compilation of the Zig source code but can also be leveraged to manage external dependencies, such as third-party libraries, or to automate other tasks as part of the build process. For instance, if the MCP server needed to interact with a specific database, the build.zig file would be the place to specify the linking against the necessary database client library. Furthermore, developers can define custom build steps to automate tasks like generating configuration files or running unit tests, streamlining the development workflow. Familiarity with the Zig build system is therefore fundamental to efficiently build, test, and deploy the MCP server.  
+
+3. Deep Dive into the MCP Specification
+A comprehensive understanding of the Model Context Protocol (MCP) specification is paramount before attempting to build an MCP server from scratch in Zig. The specification outlines the core message types, known as primitives, that govern the interactions between MCP clients and servers. These primitives are categorized into server-side and client-side functionalities.  
+
+The server-side primitives define the capabilities that an MCP server can offer to a client. Prompts are pre-prepared instructions or templates that the server can provide to guide the language model's behavior, akin to saved prompts or macros. Resources represent structured data that the server can send to the client to enrich the context available to the language model. Examples include snippets of documents, code fragments, or any other relevant information that can be incorporated into the prompt. Resources are intended to provide data without performing significant computation or having side effects. Tools are executable functions or actions that the language model, through the client, can invoke on the server. These tools can perform various tasks, such as querying a database, conducting a web search, or posting a message to a communication platform. Tools are typically model-controlled, meaning the language model can autonomously decide to use them based on the user's request and the available context.  
+
+On the client side, there are two main primitives. Roots represent an entry point into the host's filesystem or environment that the server might be granted access to, allowing the server to interact with specific local files if permitted. Sampling is a more advanced feature that enables the server to request the host AI to generate a completion based on a provided prompt. This allows for complex, multi-step reasoning processes where the server can ask the model to perform sub-tasks. However, Anthropic strongly recommends that any sampling request should always require explicit human approval to prevent unintended or harmful self-prompting.  
+
+Communication between MCP clients and servers occurs through JSON-RPC 2.0 messages. The MCP specification defines the specific JSON-RPC messages used for this interaction. JSON-RPC 2.0 is a stateless, lightweight protocol primarily focused on defining data structures and the rules for their processing. It is transport-agnostic, meaning it can be used over various communication channels, and it utilizes JSON as its data format. Key message types in JSON-RPC 2.0 include Request Objects, which are sent to invoke a method on the server and can include parameters and an optional identifier. A request without an identifier is considered a Notification, indicating that the client does not expect a response. When a request (that is not a notification) is processed, the server sends back a Response Object, which contains either a result upon successful execution or an error object if an error occurred. The response object also includes the same identifier as the original request to allow the client to correlate responses with their corresponding requests. The Error Object in a response provides details about the error, including a numeric code, a short message, and optionally additional data with more specific error information.  
+
+MCP supports two primary transport layer options for communication between clients and servers: stdio (Standard Input/Output) and HTTP via Server-Sent Events (SSE). stdio is typically used when the client and server are running on the same machine. In this mode, the client sends JSON messages to the server via its standard input stream, and the server sends responses back to the client via its standard output stream. This method simplifies local integration and debugging. HTTP via SSE is used for scenarios where the client and server might be running on different machines or when the server needs to push asynchronous updates to the client over a persistent connection. In this mode, the client establishes an HTTP connection with the server, and after an initial setup, the server can continuously send messages (events) to the client using the SSE standard.  
+
+The lifecycle of an MCP connection follows three distinct phases: Initialization, Operation, and Shutdown. The Initialization Phase involves the client and server negotiating the protocol version they will use and exchanging information about their respective capabilities. During this phase, the client typically requests a description of the tools, resources, and prompts that the server offers, and the server responds with this information. This often involves a handshake process when a host application starts and creates an MCP client. The Operation Phase is when normal protocol communication occurs. The client can send requests to the server to invoke tools, access resources, or utilize prompts. The server processes these requests and sends back the corresponding responses. Finally, the Shutdown Phase involves the graceful termination of the connection. For the stdio transport, the client typically initiates shutdown by first closing the input stream to the server and then waiting for the server to exit. The server, upon receiving a shutdown request or detecting the closure of its input stream, should release any resources associated with the session.  
+
+Primitive Name	Category	Description	Purpose
+Prompts	Server-side	Prepared instructions or templates for guiding the model.	To provide reusable instructions or structured ways to interact with the server's capabilities.
+Resources	Server-side	Structured data sent by the server to enrich the model's context.	To provide relevant external information to the language model to ground its responses.
+Tools	Server-side	Executable functions or actions the model can invoke via the server.	To allow the language model to interact with external systems and perform actions or retrieve information.
+Roots	Client-side	An entry point into the host's filesystem that the server might access if permitted.	To allow the server to access specific files or directories on the client's machine, enabling context from local data.
+Sampling	Client-side	Allows the server to request the host AI to generate a completion given a prompt.	To enable the server to leverage the language model for sub-tasks or more complex reasoning, requiring human approval for safety.
+
+Export to Sheets
+Message Type	Key Fields	Description
+Request	jsonrpc, method, params (optional), id (optional)	Sent by the client to invoke a procedure on the server. method specifies the procedure, params provides parameters, and id is used to correlate the request with the response.
+Response	jsonrpc, result (or error), id	Sent by the server as a reply to a request. Contains either the result of the procedure call or an error object indicating failure. The id matches the id of the original request.
+Notification	jsonrpc, method, params (optional)	A request that does not require a response. The client is not interested in the result of the operation. Therefore, the server will not send back a response. Notifications do not have an id field.
+
+Export to Sheets
+The distinct roles of MCP primitives, with Prompts guiding the model, Resources providing context, and Tools enabling actions, highlight the intentional design behind the protocol. This separation suggests that the implementation of an MCP server in Zig should be structured to handle each of these primitive types differently. For instance, the logic required to execute a Tool will likely be significantly different from the process of serving a Resource.  
+
+Furthermore, the choice of transport layer, whether stdio or SSE, will significantly impact the initial connection establishment and the subsequent exchange of messages. For a developer undertaking a from-scratch implementation in Zig, it might be prudent to begin with the simpler stdio transport to gain a foundational understanding of the core protocol mechanisms before tackling the added complexities of HTTP and SSE. Stdio communication, involving reading from standard input and writing to standard output, offers a more direct and potentially less intricate pathway for initial implementation and testing.
+
+4. Network Programming Fundamentals in Zig 0.14
+Building an MCP server necessitates a solid understanding of network programming fundamentals within the Zig 0.14 environment. The Zig standard library, particularly the std.net module (though its precise documentation for version 0.14.0 is not fully represented in the provided snippets), offers the necessary tools to establish network connections and manage data streams.  
+
+Establishing network connections in Zig typically involves using the std.net.Address type to represent network addresses (IP address and port number). Examples from the research material demonstrate the use of std.net.Address.parseIp4() to create an address object from a string representation of an IPv4 address and a port number. To create a TCP server that listens for incoming connections, the listen() method of the std.net.Address type is used. This method returns a server object that can then be used to accept incoming client connections via the accept() method. For establishing a TCP connection as a client, which might be useful for testing the MCP server, the std.net.tcpConnectToAddress() function can be employed.  
+
+Once a network connection is established, handling data streams becomes crucial for exchanging MCP messages. The connection object obtained after accepting a client connection usually provides a stream member, which in turn offers methods for reading data from the connection (e.g., readUntilDelimiterOrEofAlloc) and writing data to it (e.g., writeAll, write). Additionally, the std.io module provides more general interfaces like std.io.Reader and std.io.Writer for interacting with input and output streams, which can be adapted for use with network streams. These interfaces define standard ways of reading and writing data, allowing for a more abstract approach to handling different types of IO sources, including network sockets.  
+
+Implementing basic TCP server functionality serves as a fundamental building block for the MCP server. Several code snippets illustrate how to create a simple TCP server in Zig. These examples typically involve parsing a network address, creating a listening socket on that address and port, and then entering a loop to continuously accept incoming client connections. A basic echo server example from the research material  demonstrates how to read data received from a client and then write the same data back to the client, showcasing the fundamental read and write operations on a network stream.  
+
+Despite the limited official documentation for std.net in Zig 0.14.0 within the provided snippets, the presence of multiple functional examples of TCP servers and clients strongly suggests that the necessary networking capabilities are indeed available in the standard library. The consistent use of functions and methods like std.net.Address.parseIp4(), address.listen(), server.accept(), and the stream member with its read and write functionalities across different code samples indicates a relatively stable API for basic TCP networking. While consulting the complete official documentation for Zig 0.14.0 would be ideal to fully understand the structure and capabilities of the std.net module, these practical examples offer a valuable starting point for implementing the network communication layer of the MCP server.
+
+When developing the MCP server, it will be important to consider how to handle multiple client connections concurrently. The basic TCP server examples often depict a single-threaded approach, where the server handles one client at a time. For a more robust and practical MCP server that might need to interact with several AI applications simultaneously, exploring mechanisms for handling concurrent connections will be necessary. This could involve investigating Zig's capabilities for non-blocking sockets, asynchronous programming, or the use of threads from the standard library. While snippet  suggests that asynchronous programming might be a focus for later Zig versions, the possibility of using threads for concurrency should be explored. Snippet  notes a potential issue with parallel execution in the Zig cookbook's threads example, indicating that careful implementation and testing would be required.  
+
+5. Implementing the MCP Connection Process in Zig
+Implementing the MCP connection process in Zig involves handling the initial establishment of a network connection with an MCP client, followed by the capability negotiation phase, and the ongoing management of the stateful session.
+
+The connection process typically begins when a host application, running an MCP client, initiates a connection to the MCP server (our Zig application). For a server implementing the stdio transport, this would likely involve the host launching the Zig server as a child process and setting up pipes for standard input and standard output to facilitate communication. If the server were to use the HTTP SSE transport, the client would initiate an HTTP request to the server's designated endpoint.  
+
+Once the network connection is established, the MCP client usually starts the capability discovery process. This involves the client sending a JSON-RPC request to the server to inquire about the features that the server supports, specifically the available Tools, Resources, and Prompts. The Zig server must then be prepared to receive this request, parse it as a JSON-RPC message, and formulate a JSON-RPC response that accurately describes its capabilities. This response should include a list of the tools it offers, along with their names and schemas (describing the parameters and return types), the identifiers and types of the resources it can provide, and any supported prompt templates.  
+
+MCP connections are designed to be stateful, meaning that once a connection is established, the client and server maintain a session that can persist over multiple interactions. For the Zig server, managing this state will likely involve associating each incoming network connection with a specific client session. This could be achieved by storing the network stream used for communication, along with any other session-related data, in a suitable data structure. If we choose to implement client identification , we would also need a mechanism to assign and track unique IDs for each connected client. The server must also adhere to the defined MCP connection lifecycle, which includes the crucial shutdown phase. During shutdown, the client typically initiates the termination of the connection. For stdio transport, this is done by the client closing its input stream to the server. The Zig server should be designed to detect this closure and, upon detection, perform any necessary cleanup operations to gracefully end the session.  
+
+Implementing the capability negotiation will necessitate that the Zig server maintains an internal representation of all the tools, resources, and prompts it is capable of offering. When a capability discovery request is received from a client, the server will need to access this internal representation, serialize it into a JSON-RPC response that conforms to the MCP specification, and then send this response back to the client. This might involve defining Zig structs to hold the metadata for each tool (such as its name, the types of its parameters, and the type of its return value), for each resource (its identifier and type), and for each prompt (its identifier and the template itself). The server would then iterate through its registered tools, resources, and prompts, populate a response object (again, likely a Zig struct designed to represent a JSON-RPC response), and use Zig's JSON serialization capabilities to convert this object into a JSON string for transmission back to the client.  
+
+Managing the stateful session effectively will require a mechanism to associate each incoming network connection with a unique client session. This could involve using a data structure, such as a HashMap, where the key is some identifier for the client (perhaps a client ID if we implement one, or even the network address of the client) and the value is an object or struct that holds the state for that particular session. This session state would at a minimum include the network stream used to communicate with the client. If we decide to implement client IDs, upon accepting a new client connection, we would assign a unique ID to it and create a new session object, storing the connection stream and the ID. This session information would then be used to route subsequent requests received on that connection to the appropriate handlers within the server and to maintain any client-specific context or data that might be needed throughout the session.
+
+6. Implementing MCP Primitives in Zig 0.14
+The core functionality of an MCP server lies in its ability to implement the MCP primitives: Prompts, Resources, and Tools. The Zig implementation will require careful structuring of data types and the design of mechanisms to handle requests related to each primitive.
+
+Prompts can be represented in Zig as simple strings (const u8) that hold the instructional content or templates. For more intricate scenarios where prompts might include placeholders or require structured data, defining Zig structs that can be serialized into the appropriate JSON format as specified by the MCP protocol might be necessary.  
+
+Resources, being structured data, will necessitate the definition of corresponding Zig structs or enums that accurately represent the data being served. For example, if the server is designed to provide information about books, a BookResource struct might be defined with fields for title, author, ISBN, etc. These structs must be designed in a way that allows them to be easily serialized into JSON format according to the MCP specification.  
+
+The implementation of Tools requires a more dynamic approach. For each tool that the MCP server will offer (such as the calculator tool discussed later), a corresponding Zig function must be implemented that encapsulates the tool's logic. A mechanism is then needed to map the tool's name (as advertised to the client and as received in the method field of a JSON-RPC request) to its corresponding Zig function. This mapping could be achieved using a data structure like a HashMap where the key is the tool's name (a string) and the value is a pointer to the Zig function that should be executed when that tool is invoked. When a tool invocation request is received, the server would extract the tool's name from the method field of the JSON-RPC request, look up the associated Zig function in the map, and then execute that function, passing the parameters provided in the params field of the request.  
+
+Handling Root access requests would involve receiving a request from the client (likely a JSON-RPC call with a specific method, perhaps "roots/list" to list available roots or "roots/read" to read a file within a root, along with parameters specifying the root identifier and the path). The server would then use Zig's file system APIs, probably found within the std.fs module, to interact with the requested files or directories on the server's filesystem (as the server itself is acting as the host in this from-scratch implementation). It is crucial to implement strict checks to ensure that any access is confined within the intended "root" directories and to prevent the server from accessing unauthorized parts of the filesystem. The content of the accessed file or directory would then need to be formatted and returned to the client as a JSON-RPC response, possibly as a Resource primitive.  
+
+Implementing the Sampling feature presents a unique challenge in a from-scratch server implementation. Since we are not building a client-side LLM directly into our server, handling a sampling request (which would typically involve the server asking the client's LLM to generate a completion) would likely require the server to make an external call to an LLM API, if one is available and authorized. This would involve constructing a prompt based on the client's request and then handling the response received from the external LLM service. Given the security considerations associated with sampling, as highlighted by MCP, any such external LLM call should be carefully logged and ideally require some form of authorization or rate limiting.  
+
+The implementation of each MCP primitive in Zig will necessitate a clear mapping between the protocol's abstract concepts and the concrete programming constructs available in Zig. This includes carefully designing data structures to represent the data associated with each primitive and implementing the logic required to handle the incoming requests and generate the appropriate responses. For Tools, a robust registry mechanism will be essential to correctly associate tool names with their corresponding Zig functions. When a client sends a request related to a specific primitive, the server must be able to accurately identify the type of request and dispatch it to the appropriate handler function. This suggests the need for a routing mechanism within the MCP server, where the method field of the JSON-RPC request can be used to determine which primitive is being accessed and which specific action is being requested. Handlers would then need to be implemented for each of these methods, utilizing Zig's features to perform the necessary operations. For primitives like Roots and Sampling, which involve interaction with the host environment or external services, a strong emphasis on security and permissions is paramount, adhering to the guidelines provided in the MCP specification.
+
+7. Integrating a Basic Calculator Tool
+To illustrate the process of exposing functionality through an MCP server built with Zig, we can integrate a basic calculator tool. This will involve developing the calculator's logic in Zig, defining it as an MCP Tool, and handling the requests and responses associated with its invocation.
+
+The core logic of the calculator can be implemented in a dedicated Zig module, for instance, named calculator.zig. This module would contain functions for the fundamental arithmetic operations: addition, subtraction, multiplication, and division. Each function would take two numerical inputs (perhaps as floating-point numbers for broader applicability) and return the result of the operation. For the division operation, it would be prudent to include error handling to manage the case of division by zero, potentially using Zig's error union type to indicate a failure. In addition to these arithmetic functions, a parsing function will be needed to extract the operands and the desired operation from the parameters provided in the JSON-RPC request when the tool is invoked. This parsing function would need to handle the different ways in which parameters can be passed in JSON-RPC 2.0, either as an array (by position) or as an object (by name).  
+
+Once the calculator logic is implemented, the next step is to expose it as an MCP Tool. This involves defining the tool with a unique name, such as "calculator", and specifying the schema for its parameters. The schema would describe the expected inputs – for example, two numbers and an operation string (e.g., "add", "subtract", "multiply", "divide") – as well as the expected output, which would be the numerical result of the calculation. This tool definition would then need to be registered with the MCP server so that it can be included in the server's capabilities when it responds to a client's capability discovery request during the initialization phase.
+
+When an MCP client wants to use the calculator tool, it will send a JSON-RPC request to the server. This request will have a method field that indicates a tool invocation (perhaps a standardized method like "tools/call" with a parameter specifying the "calculator" tool's name) and a params field containing the necessary input for the calculation (two numbers and the operation). Upon receiving this request, the Zig server will need to parse the JSON-RPC message to extract the tool name and the parameters. It will then use the tool name to identify the corresponding calculator logic. The parsing function developed earlier will be used to extract the operands and the operation from the params. Based on the specified operation, the server will then call the appropriate calculator function with the provided operands. Finally, the result of the calculation will be formatted into a JSON-RPC response. This response will have a result field containing the calculated value. If any errors occurred during the process, such as invalid parameters being provided or a division by zero error, the server would construct a JSON-RPC error response with an appropriate error code and a descriptive message, as defined by the JSON-RPC 2.0 specification.  
+
+Integrating the calculator tool serves as a practical demonstration of how to expose server-side functionalities through the MCP protocol using the Tool primitive. This process involves the entire lifecycle of a tool: defining its capabilities, handling its invocation via JSON-RPC messages, executing the underlying logic within the Zig server, and then returning the result to the client in a JSON-RPC response. This end-to-end flow is fundamental to understanding how to add more complex tools and extend the capabilities of the MCP server in the future.  
+
+The calculator tool's implementation will also highlight the importance of careful input parameter handling. The server must be able to validate that the parameters provided by the client are of the correct type and format (e.g., that the operands are indeed numbers and that the operation is one that is supported). Robust error checking will be necessary to handle cases where the client sends invalid input, such as providing non-numeric values for the operands or specifying an operation that the calculator does not recognize. In such scenarios, the server should return informative error responses back to the client, adhering to the error response structure defined in the JSON-RPC 2.0 specification, including an appropriate error code and a human-readable error message. This ensures that the client receives clear feedback about any issues with its requests.
+
+8. Secure Execution of System Commands in Zig
+Enabling the execution of system commands from within an MCP server can significantly extend its capabilities, allowing it to interact with the underlying operating system. However, this functionality introduces substantial security risks and must be implemented with extreme caution, especially when the server is integrated with an LLM that might generate commands based on user input. Zig's standard library provides the std.process module, which offers the tools necessary to spawn and manage child processes, thus allowing the execution of external commands.  
+
+The std.process module in Zig provides functionalities for creating and interacting with child processes. The std.process.Child struct, along with functions like init, spawn, wait, and run, enables the execution of external commands from within a Zig application. The run function offers a convenient way to execute a command and wait for its completion, returning information such as the exit code and the standard output and standard error streams. For more fine-grained control over the process lifecycle, one can use init to create a Child object, followed by spawn to start the process execution, and wait to block until the process finishes. The standard input, standard output, and standard error of the child process can also be redirected as needed. The stdin_behavior field of the std.process.Child struct allows for control over how the spawned process handles its standard input, offering options such as inheriting the parent's input, ignoring it, or setting up a pipe for communication.  
+
+Executing arbitrary system commands based on input that might originate from an LLM carries significant security vulnerabilities, most notably the risk of command injection. Therefore, it is imperative to avoid directly passing user-provided or LLM-generated strings as part of shell commands. Instead, a more secure approach involves carefully validating and sanitizing any input parameters before they are used in constructing commands. Ideally, the server should rely on a predefined set of commands with strictly controlled arguments, rather than allowing the LLM to specify arbitrary command strings. A further step towards security would be to avoid executing system commands altogether whenever possible, and instead implement the desired functionalities directly within the Zig application using features from the standard library or through the use of well-vetted and trusted external libraries.
+
+If the execution of system commands is deemed absolutely necessary for certain functionalities, robust safeguards and user consent mechanisms must be implemented. One effective strategy is to maintain a whitelist of commands that the LLM is permitted to request. The server would then only execute commands that are present on this whitelist and would reject any requests for commands not explicitly allowed. For commands that are considered potentially risky, even if they are on the whitelist, a user consent mechanism should be implemented. This could involve the server sending a request back to the MCP client (the host application) to prompt the user for explicit permission before the command is executed. The input and output of any executed command must be handled with extreme care to prevent unintended consequences, such as unauthorized access to sensitive resources or the leakage of confidential information. Consider implementing restrictions on the directories or resources that the executed command can access, perhaps through sandboxing or other isolation techniques.  
+
+Secure execution of system commands is a paramount concern in the context of an MCP server, especially one that interacts with an LLM. Directly allowing an LLM to run arbitrary commands poses a severe security threat. If this functionality is required, the Zig implementation must prioritize security through the implementation of stringent controls, such as a command whitelist and explicit user consent, for any potentially risky operations. The MCP specification itself emphasizes the importance of security and user control in interactions involving data access and tool execution.  
+
+While Zig's std.process module provides the necessary tools to execute external commands, it is ultimately the responsibility of the developer to ensure that these tools are used in a secure manner. Developers should be aware of potential issues and limitations associated with this module, as indicated by some of the reported GitHub issues , and should implement thorough error handling and security checks to mitigate risks. The fact that any external command executed will run with the same privileges as the MCP server underscores the need for caution and the implementation of robust security measures to prevent unintended or malicious actions.  
+
+9. Data Serialization and Deserialization with JSON-RPC 2.0 in Zig
+The Model Context Protocol relies heavily on JSON-RPC 2.0 for communication, making the correct serialization and deserialization of JSON data a fundamental requirement for building an MCP server in Zig. Zig 0.14.0's standard library includes the std.json module, which provides the necessary functionalities for handling JSON data, including parsing JSON strings into Zig data structures and converting Zig data structures back into JSON strings.  
+
+The std.json.parseFromSlice function in Zig is used to parse a JSON string, which is typically represented as a slice of bytes (u8), into a specific Zig struct type. This function requires an allocator to manage the memory for any strings, arrays, or maps that might be present within the JSON structure. The result of a successful parse operation is a std.json.Parsed struct. It is important to deinitialize this struct using defer parsed.deinit() to ensure that any allocated memory is properly freed after use. The actual parsed data can be accessed through the parsed.value field of the std.json.Parsed struct.  
+
+Conversely, the std.json.stringify function is used to convert Zig data into a JSON string. This function takes the Zig data to be converted as its first argument, followed by an optional empty struct literal for configuration options, and then a writer interface to which the resulting JSON string will be written. For instance, one could use an std.ArrayList(u8) initialized with a fixed buffer allocator as the writer to store the JSON string in memory.  
+
+Given that MCP communication is based on JSON-RPC 2.0, the Zig server must be capable of correctly serializing outgoing JSON-RPC messages (both requests and responses) and deserializing incoming JSON-RPC messages. This will involve defining Zig structs that mirror the structure of the JSON-RPC 2.0 request and response objects as specified in the protocol's specification. These structs would typically include fields for jsonrpc (which should always be the string "2.0"), method (for requests), params (for parameters in requests), id (for correlating requests and responses), and either result (for successful responses) or error (for error responses). The std.json.stringify and std.json.parseFromSlice functions can then be used to convert between these Zig structs and their corresponding JSON representations. For notifications, which are requests without an id, a corresponding Zig struct would also need to be defined, typically containing fields for jsonrpc, method, and optionally params.  
+
+It is also crucial to handle potential errors that might occur during the JSON processing. The std.json.parseFromSlice function can return an error if the provided JSON string is not well-formed or if its structure does not match the expected structure of the target Zig struct. When using this function, it is important to use try to catch these potential errors and to generate appropriate error responses back to the client, as defined by the JSON-RPC 2.0 specification. Similarly, the std.json.stringify function might encounter errors during the serialization process, which should also be handled appropriately.  
+
+Zig 0.14.0's std.json module provides a robust foundation for handling the JSON-based communication required by the MCP protocol. Developers will need to define Zig structs that accurately represent the JSON-RPC message formats for requests, responses, and notifications, as well as for any data structures used within the MCP primitives themselves (such as the parameters for tools or the structure of resources). The std.json.parseFromSlice function can then be used to convert incoming JSON messages into these Zig structs, and std.json.stringify can be used to convert Zig data back into JSON format for sending responses. It is important to remember that the parsing process requires an allocator to be provided for managing any dynamic data within the JSON structure.
+
+While the std.json module handles the basic serialization and deserialization of JSON, implementing the full JSON-RPC 2.0 protocol as required by MCP might necessitate the implementation of additional logic. This could include ensuring that parsed JSON-RPC messages adhere to the specific requirements of the MCP protocol for different methods and primitives, such as validating the presence and types of expected fields. Additionally, the server will need to implement logic to correctly match request IDs with their corresponding responses and to format error responses according to the JSON-RPC 2.0 specification, including the appropriate error codes and messages. The std.json module provides the building blocks for JSON handling, but the MCP server will need to build upon these basic functionalities to ensure full compliance with the protocol's rules for requests, responses, notifications, and error handling.  
+
+10. Project Structure and Organization in Zig 0.14
+For a complex project like an MCP server, a well-defined project structure and organization are crucial for maintainability, readability, and scalability. In Zig 0.14.0, the recommended approach is to separate different functionalities into distinct modules (separate .zig files) and then use Zig's @import mechanism to include these modules where needed.  
+
+A logical way to structure the MCP server project would be to separate the network handling, the core MCP protocol implementation, and the specific tool functionalities into different modules. For instance, a network.zig module could be responsible for all low-level network operations, such as setting up the server socket, accepting incoming connections, and handling the reading and writing of data over these connections. A mcp.zig module could contain the core logic for implementing the Model Context Protocol itself. This would include parsing and serializing JSON-RPC messages according to the MCP specification, managing the lifecycle of client-server connections, and dispatching incoming requests to the appropriate handlers based on the method field. Then, each tool offered by the server, such as the calculator, could be implemented in its own module (e.g., calculator.zig), encapsulating its specific logic. The main entry point of the application, typically in src/main.zig, would then be responsible for initializing the server, setting up the network listener, and using the functionalities provided by the other modules to handle incoming client connections and requests.
+
+Adhering to best practices for code organization and maintainability in Zig is also essential. This includes following Zig's style conventions for naming, formatting, and commenting code. Using meaningful and descriptive names for variables, functions, and types significantly improves the readability of the code. Breaking down complex logic into smaller, well-defined functions makes the codebase easier to understand and test. Adding comments to explain parts of the code that might not be immediately obvious, as well as documenting the purpose and behavior of functions and modules, is crucial for maintainability. Furthermore, utilizing Zig's built-in testing framework (@import("std").testing) to write unit tests for individual modules and functions is a vital practice to ensure that each component of the server works correctly and reliably.  
+
+A modular project structure, where different concerns are separated into distinct modules, significantly enhances the maintainability and scalability of the MCP server. By isolating functionalities like network handling, protocol implementation, and tool logic, changes or additions to one part of the system are less likely to have unintended consequences on other parts. For example, if a new tool needs to be added to the server, it can be implemented in a new module without requiring modifications to the core networking or MCP handling logic. This separation of concerns makes the codebase easier to understand, test, and update over time. It also promotes code reuse, as fundamental functionalities like network communication or JSON serialization, likely implemented in the network.zig and mcp.zig modules, can be used by all the tool modules.  
+
+Given Zig's emphasis on explicitness and manual memory management, especially with the introduction of unmanaged containers in version 0.14.0, careful planning of module dependencies and resource ownership is crucial to avoid issues such as memory leaks or dangling pointers. The "unmanaged" nature of Zig's containers means that memory allocation and deallocation must be explicitly managed. The project structure should reflect this by clearly defining which module is responsible for allocating memory for specific data structures and ensuring that this memory is properly freed when it is no longer needed. For instance, the network.zig module might be responsible for allocating buffers to read data from network connections, and it would also need to ensure that these buffers are deallocated when the connection is closed. Similarly, the mcp.zig module, when parsing JSON messages, would need to use an allocator and ensure that the memory allocated for the parsed data is eventually freed.  
+
+11. Security Considerations for the MCP Server
+Security must be a paramount concern throughout the entire design and implementation process of an MCP server, especially given its role in connecting LLMs with external systems and potentially executing tools or accessing data. The MCP specification itself places a strong emphasis on security and trust & safety.  
+
+The MCP specification highlights the importance of user consent and control over any data access or tool execution initiated by the server. When implementing the Zig server, mechanisms should be put in place to ensure that explicit user authorization is obtained before the server is allowed to perform any actions that could have security implications, such as accessing files on the client's system (via the Roots primitive) or executing system commands (via Tools). This consent is typically managed by the host application, which acts as the MCP client. The server should be designed to communicate any requests for such actions back to the client, allowing the user to make an informed decision about granting or denying permission.  
+
+Data privacy and protection are also critical considerations. If the MCP server handles any sensitive user data, whether as part of a Resource being served or during the execution of a tool, it is essential to ensure that this data is protected with appropriate access controls. Furthermore, the server should not transmit any user data elsewhere without obtaining explicit consent from the user. This might involve using secure communication channels, such as TLS encryption if the server supports the HTTP SSE transport, and carefully managing how data is stored and processed within the server's implementation.  
+
+The security implications of tool execution and LLM sampling require particular attention. As discussed earlier, allowing the execution of arbitrary system commands through a tool poses a significant security risk. The Zig server should implement strict controls over which tools can be executed and what actions they are permitted to perform. This could involve using a whitelist of allowed tools or implementing a robust authorization mechanism. Similarly, if the server implements the Sampling primitive, where it can request the client's LLM to generate a completion, it is important to adhere to the security guidelines provided by the MCP specification, which includes limiting the server's visibility into the prompts used for sampling and ensuring user approval for such requests to prevent potential misuse or runaway self-prompts.  
+
+Security should be a fundamental aspect woven into the very fabric of the MCP server's design and implementation in Zig, rather than being treated as an afterthought. Every feature that is implemented should be carefully evaluated for its potential security implications, and appropriate safeguards should be built in from the outset. For instance, when designing how the server will handle tool invocations, especially those that interact with the external environment (like accessing files or running commands), the principle of least privilege should be followed. The server should only be granted the permissions necessary to perform its intended tasks, and any broader access should be avoided. Additionally, all input received from the client should be rigorously validated before being used in any potentially sensitive operations to prevent vulnerabilities like injection attacks.  
+
+Given that the user's query involves building an MCP server from scratch, it is important to consider how the user consent mechanisms recommended by the MCP specification would be implemented in a Zig-based system. Since we are not relying on pre-existing MCP client implementations, we have the flexibility to define our own approach to handling authorization requests and responses for sensitive operations. For example, when the server receives a request to execute a tool that is deemed potentially risky, it could send a custom JSON-RPC notification back to a corresponding Zig-based client, specifying the tool and its parameters and requesting user approval. The client would then present this information to the user and send back a response (perhaps another custom JSON-RPC message) to the server, either granting or denying permission. The server would then proceed with the tool execution based on the user's decision.
+
+12. Conclusion and Future Directions
+Building an MCP server in Zig 0.14 from scratch is a multifaceted endeavor that requires a thorough understanding of the Model Context Protocol specification, proficiency in network programming with Zig, and a strong focus on security. The process involves setting up the development environment, delving into the intricacies of MCP primitives and communication protocols, implementing network communication capabilities, integrating tools, and ensuring secure handling of any potentially risky operations.
+
+The journey begins with familiarizing oneself with the MCP's architecture, its key components (Hosts, Clients, Servers), and the benefits it offers in standardizing the integration between LLMs and external systems. Setting up the Zig 0.14 development environment, including understanding the implications of the shift to unmanaged containers, is a crucial initial step. A deep dive into the MCP specification, particularly the server-side primitives (Prompts, Resources, Tools) and the underlying JSON-RPC 2.0 communication protocol, provides the necessary theoretical foundation. Implementing network programming fundamentals in Zig, focusing on establishing connections and handling data streams, forms the basis for the server's ability to communicate with MCP clients. The connection process itself, including capability negotiation and session management, needs to be carefully implemented according to the MCP lifecycle. Translating the MCP primitives into concrete Zig data structures and designing the tool execution mechanism are core tasks in bringing the server's functionality to life. Integrating a basic calculator tool serves as a practical example of how to expose functionality via MCP. For more advanced scenarios, securely executing system commands using Zig's std.process module requires stringent security measures. Throughout this process, correct data serialization and deserialization using Zig's std.json module are essential for ensuring proper communication. Finally, a well-organized project structure and a continuous focus on security considerations are paramount for creating a robust and reliable MCP server.
+
+Potential enhancements and future development areas for an MCP server built in Zig 0.14 are numerous. One could focus on implementing more of the MCP primitives, such as the client-side Roots and Sampling features, to provide a more complete implementation of the protocol. Supporting the HTTP SSE transport in addition to the stdio transport would broaden the server's compatibility and enable more advanced communication patterns. Expanding the set of tools offered by the server beyond the basic calculator to include functionalities like file system access (with proper security controls) or interactions with other services would increase its utility. Further improvements in security, such as implementing more sophisticated authorization mechanisms and sandboxing for tool execution, would be beneficial. Robust error handling and comprehensive logging would also enhance the server's reliability and aid in debugging. Finally, exploring Zig's concurrency features to allow the server to handle multiple client connections simultaneously would be a key step towards building a production-ready MCP server.
+
+
+Sources used in the report
+
+bigdatawire.com
+Will Model Context Protocol (MCP) Become the Standard for Agentic AI? - Datanami
+Opens in a new window
+
+infoq.com
+Anthropic Publishes Model Context Protocol Specification for LLM App Integration - InfoQ
+Opens in a new window
+
+wandb.ai
+The Model Context Protocol (MCP) by Anthropic: Origins, functionality, and impact - Wandb
+Opens in a new window
+
+medium.com
+Anthropic's Model Context Protocol (MCP): A Deep Dive for Developers - Medium
+Opens in a new window
+
+philschmid.de
+Model Context Protocol (MCP) an overview - Philschmid
+Opens in a new window
+
+medium.com
+The Model Context Protocol (MCP) — A Complete Tutorial | by Dr. Nimrita Koul - Medium
+Opens in a new window
+
+jsonrpc.org
+JSON-RPC 2.0 Specification
+Opens in a new window
+
+ziggit.dev
+Execute a program from zig - Help - Ziggit
+Opens in a new window
+
+stackoverflow.com
+How to run shell commands which require input in zig? - Stack Overflow
+Opens in a new window
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+Opens in a new window
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+Opens in a new window
+
+medium.com
+Zig TCP Server. So I've recently began a journey where… | by Andrew Poydence | Medium
+Opens in a new window
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+Opens in a new window
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+Opens in a new window
+
+zigcc.github.io
+TCP Client - Zig cookbook
+Opens in a new window
+
+ziggit.dev
+Sockets with std.net in Zig 0.13.0 - Explain - Ziggit
+Opens in a new window
+
+zig.guide
+JSON | zig.guide
+Opens in a new window
+
+spec.modelcontextprotocol.io
+Model Context Protocol specification
+Opens in a new window
+
+ziggit.dev
+Zig 0.14.0 released - News - Ziggit
+Opens in a new window
+
+ziggit.dev
+Zig async implementation - Explain - Ziggit
+Opens in a new window
+
+github.com
+SIGABRT in std.process.Child.run outside Debug mode · Issue #17704 · ziglang/zig - GitHub
+Opens in a new window
+
+reddit.com
+Zigar 0.14.0: A major step forward in Zig-JavaScript interoperability - Reddit
+Opens in a new window
+
+ziggit.dev
+Build.zig: depending on a file generated by system command - Help - Ziggit
+Opens in a new window
+
+github.com
+std.process.Child is able to spawn non existend programs with no errors. #22737 - GitHub
+Opens in a new window
+
+openmymind.net
+Custom String Formatting and JSON [De]Serializing in Zig
+Opens in a new window
+
+youtube.com
+Text Editor in Zig : JSON-RPC API [#7] - YouTube
+Opens in a new window
+
+ziglang.org
+Download - Zig Programming Language
+Opens in a new window
+
+blog.apify.com
+What is Anthropic's Model Context Protocol (and why does it matter)? - Apify Blog
+Opens in a new window
+
+composio.dev
+What is Model Context Protocol (MCP): Explained - Composio
+Opens in a new window
+
+ziglang.org
+Home Zig Programming Language
+Opens in a new window
+
+reddit.com
+How to create, read and write files in Zig? - Reddit
+Opens in a new window
+
+reddit.com
+Good way to write Zig code? - Reddit
+Opens in a new window
+
+zig.guide
+Readers and Writers - zig.guide
+Opens in a new window
+
+news.ycombinator.com
+Zig cookbook: collection of simple Zig programs that demonstrate good practices | Hacker News
+Opens in a new window
+
+zig.guide
+Installation | zig.guide
+Opens in a new window
+
+zig.guide
+Zig Build - zig.guide
+Opens in a new window
+
+openmymind.net
+Reading a JSON config in Zig
+Opens in a new window
+
+github.com
+zig-cookbook/build.zig at main - GitHub
+Opens in a new window
+
+zig.guide
+JSON - zig.guide
+Opens in a new window
+
+learnxinyminutes.com
+Learn Zig in Y Minutes
+Opens in a new window
+
+Thoughts
+
+Understanding the Goal
+I'm starting to think through the steps to build this MCP server in Zig. The user wants a basic server with a calculator and a way to run command-line tools, all built from scratch in Zig 0.14 without any external help. This means I'll need to figure out networking, how to handle calculations, and how to run other programs from within Zig.
+Initial Research Plan
+My initial plan is to first understand what exactly Anthropic's Model Context Protocol (MCP) is by looking for its official documentation. Then, I'll research how to do basic networking in Zig 0.14. After that, I'll focus on implementing the calculator and the command-line tool execution features in Zig. Finally, I'll look at how to put it all together in a simple server structure that follows the MCP specification.
+Next Steps
+My immediate next step is to find the official documentation or any detailed information about Anthropic's Model Context Protocol. This will be crucial for understanding how the server needs to communicate.
+
+Researching websites
+
+bigdatawire.com
+Will Model Context Protocol (MCP) Become the Standard for Agentic AI? - Datanami
+
+infoq.com
+Anthropic Publishes Model Context Protocol Specification for LLM App Integration - InfoQ
+
+wandb.ai
+The Model Context Protocol (MCP) by Anthropic: Origins, functionality, and impact - Wandb
+
+medium.com
+Anthropic's Model Context Protocol (MCP): A Deep Dive for Developers - Medium
+
+philschmid.de
+Model Context Protocol (MCP) an overview - Philschmid
+
+medium.com
+The Model Context Protocol (MCP) — A Complete Tutorial | by Dr. Nimrita Koul - Medium
+Key MCP Concepts
+I've learned that the Model Context Protocol (MCP) is designed to be a standard way for AI models to connect with external tools and data. It uses a client-server setup where AI applications act as clients and tools/data sources are servers. The protocol defines specific message types, called primitives, for different actions like providing instructions, sharing data, and executing functions.
+Communication Details
+The communication in MCP is based on a standard called JSON-RPC 2.0. This protocol helps ensure that clients and servers can reliably exchange information. For the actual transfer of data, MCP supports using standard input/output for local connections and a technology called Server-Sent Events (SSE) over HTTP for connections across different machines.
+Further Investigation
+To get a clearer picture of how to build the server, I need to find the official specification document for the Model Context Protocol. This document should give me the detailed rules and formats for all the messages and interactions involved. I also plan to look into the specifics of JSON-RPC 2.0 to make sure I understand how to implement the communication correctly.
+
+Researching websites
+
+spec.modelcontextprotocol.io
+
+docs.opendaylight.org
+JSON-RPC Developer Guide
+
+medium.com
+The Model Context Protocol (MCP) — A Complete Tutorial | by Dr. Nimrita Koul - Medium
+
+spec.open-rpc.org
+OpenRPC Specification | spec
+
+github.com
+Model Context Protocol - GitHub
+
+software.dzhuvinov.com
+JSON-RPC 2.0 : Base Java Classes - [d]zhuvinov [s]oftware
+
+medium.com
+Anthropic's Model Context Protocol (MCP): A Deep Dive for Developers - Medium
+
+stackoverflow.com
+JSON-RPC schema specification? - Stack Overflow
+
+datatracker.ietf.org
+draft-yang-json-rpc-02 - IETF Datatracker
+
+docs.anthropic.com
+Model Context Protocol (MCP) - Anthropic API
+MCP Specification Found
+I've located the official specification for the Model Context Protocol. This is a crucial step as it will provide the detailed technical information needed to build the server.
+Next Steps: Deep Dive
+My next action is to thoroughly examine the MCP specification. I need to understand the structure of the messages exchanged between the client and the server, the different types of data that can be sent, and the overall process of communication. Additionally, I'll be looking into the details of JSON-RPC 2.0 to ensure I correctly implement the communication protocol.
+
+Researching websites
+
+docs.opendaylight.org
+JSON-RPC Developer Guide — JSON-RPC master documentation
+
+jsonrpc.org
+JSON-RPC 2.0 Specification
+
+spec.modelcontextprotocol.io
+Understanding MCP and JSON-RPC
+I've now gained a solid understanding of Anthropic's Model Context Protocol (MCP) and its underlying communication mechanism, JSON-RPC 2.0. I know that MCP uses a client-server model and defines specific message formats for different interactions. JSON-RPC 2.0, being a lightweight protocol, uses JSON for data exchange and defines the structure for requests, responses, and errors.
+Key MCP Features
+I've identified the core features of MCP, which include server-side primitives like Resources (for data), Prompts (for instructions), and Tools (for executable functions), as well as client-side primitives like Sampling (for generating text). Security and controlled access are important aspects of MCP, ensuring user consent and data privacy.
+Next Steps in Zig
+With a better grasp of the protocol, I will now shift my focus to the technical aspects of building this server in Zig 0.14. I need to investigate how to handle network connections, implement the calculator and CLI tools, and structure the overall project according to the MCP specification. I'll be looking for information on network programming, process execution, and basic input/output operations in Zig 0.14.
+
+Researching websites
+
+github.com
+zigcc/zig-cookbook: Simple Zig programs that demonstrate good practices to accomplish common programming tasks. - GitHub
+
+zouyee.medium.com
+zig-learning:A bunch of links to blog posts, articles, videos, etc for learning Zig | by zouyee
+
+zig.news
+Easy web requests in Zig with Client.fetch
+
+dev.to
+Building a Command-Line Calculator in Zig - Tutorial - DEV Community
+
+gist.github.com
+A simple example of a calculator programming language that compiles to native code!
+
+pypi.org
+ziglang - PyPI
+
+github.com
+capy/examples/calculator.zig at master - GitHub
+
+stackoverflow.com
+Get environment variable with default - Stack Overflow
+
+ziggit.dev
+Execute a program from zig - Help - Ziggit
+
+stackoverflow.com
+How to run shell commands which require input in zig? - Stack Overflow
+
+ziggit.dev
+Issues with vscode-zig zig path config and test runner - Help - Ziggit
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+medium.com
+Zig TCP Server. So I've recently began a journey where… | by Andrew Poydence | Medium
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+
+zigcc.github.io
+Introduction - Zig cookbook
+
+github.com
+SIOCSIFFLAGS, SIOCGIFFLAGS missing from std.os.linux · Issue #20497 · ziglang/zig
+
+reddit.com
+Help with networking : r/Zig - Reddit
+
+openmymind.net
+TCP Server in Zig - Part 1 - Single Threaded
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+
+youtube.com
+Zig 0.14's Labeled Switch is weird - YouTube
+Zig Implementation Details
+I've started looking into how to implement the different parts of the MCP server using Zig 0.14. I found some helpful resources for setting up a basic network server, handling calculations, and running external commands. These examples and documentation snippets should give me a good starting point for building each of these components from scratch.
+Core Functionality Research
+My research indicates that I can use Zig's standard library for networking, specifically for creating a TCP server. For the calculator, a tutorial on building a command-line calculator in Zig seems relevant. To enable the server to run command-line tools, I've found discussions about using `std.process.Child` in Zig.
+Next Steps: Deeper Exploration
+To get a more concrete understanding, I will now look at the detailed content of the resources I found. I plan to browse the TCP server tutorial, the Zig standard library documentation for networking, the calculator tutorial, and the information on executing subprocesses. This will help me understand the specific code and steps involved in implementing each feature in Zig 0.14.
+
+Researching websites
+
+ziglang.org
+std - Zig Documentation
+
+openmymind.net
+TCP Server in Zig - Part 1 - Single Threaded
+
+github.com
+zigcc/zig-cookbook: Simple Zig programs that demonstrate ... - GitHub
+
+ziggit.dev
+Execute a program from zig - Help - Ziggit
+
+dev.to
+Building a Command-Line Calculator in Zig - Tutorial - DEV ...
+Progress on Core Components
+I've made progress in understanding how to build the fundamental parts of the MCP server in Zig 0.14. I found a good resource explaining how to set up a basic TCP server using the `std.posix` library. Additionally, I have a clear guide on creating a command-line calculator and information on how to execute external programs using `std.process.Child` in Zig.
+Further Networking Details Needed
+While I have a starting point for networking with `std.posix`, I still need to explore the capabilities of `std.net` in Zig 0.14, as it might offer more convenient ways to handle network operations. I also need to find a simple network server example within the Zig cookbook to see a practical implementation.
+Next Steps: Filling the Gaps
+My next steps involve digging deeper into Zig's networking capabilities by searching for examples using `std.net` and looking for network server examples in the Zig cookbook. I also need to start researching how to handle the initial connection process defined by the MCP specification and how to work with MCP messages in Zig.
+
+Researching websites
+
+zigcc.github.io
+TCP Client - Zig cookbook
+
+zigcc.github.io
+Introduction - Zig cookbook
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+medium.com
+Model Context Protocol (MCP) in AI | by BavalpreetSinghh | Mar, 2025 - Medium
+
+medium.com
+Zig HTTP Server. If you're like me, then one of the… | by Andrew Poydence - Medium
+
+ziggit.dev
+Sockets with std.net in Zig 0.13.0 - Explain - Ziggit
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+ziggit.dev
+Best Practices for Structuring Zig Projects with External Dependencies - Help - Ziggit
+
+openmymind.net
+TCP Server in Zig - Part 1 - Single Threaded
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+
+github.com
+zigcc/zig-idioms: Common idioms used in Zig - GitHub
+
+philschmid.de
+Model Context Protocol (MCP) an overview - Philschmid
+
+zig.guide
+JSON - zig.guide
+
+strongly-typed-thoughts.net
+
+reddit.com
+Easiest way to make std.json.stringify work on std.ArrayLists? : r/Zig - Reddit
+
+reddit.com
+Idiomatic zig for initializing an allocated structure - Reddit
+
+github.com
+Authentication · modelcontextprotocol specification · Discussion #64 - GitHub
+
+ziggit.dev
+Idiomatic project directory structure? - Help - Ziggit
+
+stytch.com
+Model Context Protocol (MCP): A comprehensive introduction for developers - Stytch
+Networking in Zig
+I've been exploring network programming in Zig 0.14 and have found resources detailing how to create a TCP server using the `std.net` module. This seems like a more idiomatic approach compared to using `std.posix` directly, and I've identified some example code that demonstrates the basic structure of a server that listens for and accepts connections.
+Handling MCP Connections
+I'm now thinking about how the initial connection phase of the Model Context Protocol will work within this Zig server. Based on the MCP specification, I need to figure out how to handle the initial handshake or any specific messages exchanged when a client first connects. This will likely involve reading data from the network stream and responding appropriately according to the protocol.
+Next Steps: Implementing Connection Handling
+My next step is to focus on implementing the MCP connection handling logic in Zig. I'll need to combine my understanding of Zig's networking capabilities with the specifics of the MCP connection process to ensure the server can correctly establish communication with MCP clients.
+
+Researching websites
+
+bigdatawire.com
+Will Model Context Protocol (MCP) Become the Standard for Agentic AI? - Datanami
+
+infoq.com
+Anthropic Publishes Model Context Protocol Specification for LLM App Integration - InfoQ
+
+wandb.ai
+The Model Context Protocol (MCP) by Anthropic: Origins, functionality, and impact - Wandb
+
+medium.com
+Anthropic's Model Context Protocol (MCP): A Deep Dive for Developers - Medium
+
+philschmid.de
+Model Context Protocol (MCP) an overview - Philschmid
+
+medium.com
+The Model Context Protocol (MCP) — A Complete Tutorial | by Dr. Nimrita Koul - Medium
+MCP Overview
+I've gathered information about Anthropic's Model Context Protocol (MCP). It's designed as an open standard to streamline how AI models connect with external data and tools, aiming to solve the complexities of integrating different models with various resources. MCP uses a client-server architecture where AI applications act as clients and services providing data or tools are servers. The protocol defines specific message types, called primitives, for different functionalities.
+Technical Details
+MCP communication relies on JSON-RPC 2.0, a lightweight protocol for exchanging data in JSON format. The transport layer can be either standard input/output for local connections or HTTP with Server-Sent Events (SSE) for remote communication. The protocol also specifies a lifecycle for connections, including initialization, operation, and shutdown phases. Security is a key consideration, with the host application managing client and server connections.
+Next Steps
+Now that I have a good understanding of the Model Context Protocol, my next step is to focus on the specifics of the MCP specification. I need to find the URL for this document and then examine its contents to understand the detailed message formats and the exact flow of communication between clients and servers.
+
+Researching websites
+
+github.com
+Model Context Protocol - GitHub
+
+medium.com
+The Model Context Protocol (MCP) — A Complete Tutorial | by Dr. Nimrita Koul - Medium
+
+medium.com
+Anthropic's Model Context Protocol (MCP): A Deep Dive for Developers - Medium
+
+spec.open-rpc.org
+OpenRPC Specification | spec
+
+docs.anthropic.com
+Model Context Protocol (MCP) - Anthropic API
+
+docs.opendaylight.org
+JSON-RPC Developer Guide
+
+software.dzhuvinov.com
+JSON-RPC 2.0 : Base Java Classes - [d]zhuvinov [s]oftware
+
+stackoverflow.com
+JSON-RPC schema specification? - Stack Overflow
+
+datatracker.ietf.org
+draft-yang-json-rpc-02 - IETF Datatracker
+Locating the Specification
+I've successfully found the GitHub repository for the Model Context Protocol, which likely contains the detailed specification. I also found a direct link to the specification document within a Medium article. To further understand the communication protocol used by MCP, I'll also be looking at the specification for JSON-RPC 2.0.
+Next Steps: Examining Specifications
+My next action is to thoroughly review the official MCP specification from both the GitHub repository and the direct link. Additionally, I will examine the JSON-RPC 2.0 specification to ensure I have a comprehensive understanding of the communication requirements for building the MCP server.
+
+Researching websites
+
+github.com
+Model Context Protocol · GitHub
+
+spec.open-rpc.org
+OpenRPC Specification | spec
+
+spec.modelcontextprotocol.io
+MCP Architecture and Features
+I've gained a clearer understanding of the Model Context Protocol (MCP) by exploring its GitHub repository and specification. I now know that MCP follows a client-server architecture and defines key features like Resources for data, Prompts for instructions, Tools for actions, and Sampling for generating text. The communication between clients and servers is based on JSON-RPC 2.0.
+Next Steps: Zig Implementation
+To proceed with building the MCP server in Zig 0.14, I will now focus on the practical aspects. My next steps involve researching network programming in Zig 0.14, specifically looking for resources on establishing TCP connections and handling data streams using the standard library. I will also search for examples of simple network servers built with Zig 0.14 to get a foundational understanding of server architecture in this language.
+
+Researching websites
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+zig.news
+Easy web requests in Zig with Client.fetch
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+github.com
+zigzap/zap: blazingly fast backends in zig - GitHub
+
+openmymind.net
+TCP Server in Zig - Part 1 - Single Threaded
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+
+reddit.com
+0.14.0 Release Notes : r/Zig - Reddit
+
+ziggit.dev
+Zig 0.14.0 released - News - Ziggit
+
+belief-driven-design.com
+Why Everyone Talks About Zig | belief driven design
+
+medium.com
+Zig TCP Server. So I've recently began a journey where… | by Andrew Poydence | Medium
+
+ziglang.org
+Learn - Zig Programming Language
+
+zouyee.medium.com
+zig-learning:A bunch of links to blog posts, articles, videos, etc for learning Zig | by zouyee
+
+ziggit.dev
+Which version of zig is most stable for long term? - Help - Ziggit
+
+youtube.com
+Zig 0.14's Labeled Switch is weird - YouTube
+
+github.com
+std.http.Client: unable to establish tls connection to GNU Savannah's git repository server · Issue #22650 · ziglang/zig - GitHub
+
+zigcc.github.io
+Introduction - Zig cookbook
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+
+github.com
+SIOCSIFFLAGS, SIOCGIFFLAGS missing from std.os.linux · Issue #20497 · ziglang/zig
+
+ziggit.dev
+Zig async implementation - Explain - Ziggit
+Zig Networking Basics
+I've found some useful information about network programming in Zig 0.14. It appears that Zig's standard library provides the necessary tools for creating network applications, specifically using functions like `posix.socket()` to create sockets, `posix.bind()` to associate them with an address and port, and `posix.listen()` to prepare for incoming connections. I also learned about accepting connections and handling data using `posix.accept()`, `posix.read()`, and `posix.write()`.
+Further Exploration Needed
+To get a more in-depth understanding of how to implement the MCP server, I need to look closer at the provided resources. The article on building a TCP server in Zig seems particularly relevant, and I plan to examine it to understand the step-by-step process, including error handling and the overall structure. I'll also review the Stack Overflow example for any additional insights.
+Next Steps: Deeper Dive into Zig Networking
+My next action is to browse the article titled 'TCP Server in Zig - Part 1 - Single Threaded' and the Stack Overflow answer. I will pay close attention to how the Zig standard library functions are used for networking, how errors are managed, and the general organization of the server code. This will give me a better foundation for building the MCP server.
+
+Researching websites
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+
+openmymind.net
+TCP Server in Zig - Part 1 - Single Threaded
+
+ziglang.org
+Documentation - The Zig Programming Language
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+Zig Networking Fundamentals
+I've gained a foundational understanding of network programming in Zig 0.14. I now know how to use the standard library to create, bind, and listen on network sockets, as well as how to accept incoming connections and handle data streams for reading and writing.
+Next Steps: Implementing Features
+My next steps involve researching how to implement the calculator functionality within a Zig application, including handling arithmetic operations and parsing input. I also need to explore how to execute system commands or subprocesses from Zig, keeping security and input/output in mind. Additionally, I'll need to investigate how to handle the connection process according to the Model Context Protocol (MCP) specification and understand the message structure and data types used in MCP for proper data handling in Zig. Finally, I'll consider how to structure the Zig project for clarity.
+
+Researching websites
+
+zigtools.org
+ZLS 0.14.0 - zigtools
+
+youtube.com
+My favorite Zig 0.14 feature is one that I can't use - YouTube
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+
+stackoverflow.com
+How can I parse an integer from a string in Zig? - Stack Overflow
+
+ziggit.dev
+How to convert numerical values to string? And vice-versa? : from Redit - Help - Ziggit
+
+reddit.com
+Trouble with converting zig strings into c strings for inotify(7) - Reddit
+
+stackoverflow.com
+How to cast a runtime slice range to fixed array in zig 0.14.0? - Stack Overflow
+
+github.com
+capy/examples/calculator.zig at master - GitHub
+
+youtube.com
+Zig 0.14 upgrade day! - YouTube
+
+dev.to
+Building a Command-Line Calculator in Zig - Tutorial - DEV Community
+
+codesuji.com
+Dynamic Time Warping with Zig - codesuji
+
+github.com
+0.14.1 Milestone - GitHub
+Calculator Implementation
+I've found that Zig 0.14 provides the necessary tools for building a calculator. I can use standard arithmetic operators and functions like `std.fmt.parseInt` and `std.fmt.parseFloat` to handle number conversions. There are also examples of both command-line and GUI calculators in Zig that I can look at for guidance on structuring the code and handling different operations.
+Further Calculator Details
+To get a more detailed understanding of how to implement the calculator, I will now examine a tutorial on building a command-line calculator in Zig. This should show me how to structure a basic calculator application and manage different mathematical operations. I also plan to look at a more complex GUI calculator example to see how user input and various operations are handled in a more involved scenario.
+Next Steps
+My next action is to browse the resources I've identified, specifically the command-line calculator tutorial and the GUI calculator example. I will also consult the Zig documentation for the `std.fmt.parseInt` and `std.fmt.parseFloat` functions to understand their usage and error handling in detail. This will give me a solid foundation for implementing the calculator feature for the MCP server.
+
+Researching websites
+
+ziglang.org
+std - Zig Documentation
+
+ziglang.org
+std - Zig Documentation
+
+dev.to
+Building a Command-Line Calculator in Zig - Tutorial - DEV ...
+
+github.com
+capy/examples/calculator.zig at master · capy-ui/capy · GitHub
+Calculator Logic
+I've gained insights into implementing the calculator functionality in Zig 0.14. I now understand how to perform basic arithmetic operations and use `std.fmt.parseFloat` for converting strings to numbers. A tutorial and an example have shown me how to structure the calculator logic and handle input.
+Next Steps: Version-Specific Information
+To resolve this, I will now search for the Zig 0.14 standard library documentation online. My goal is to find the specific details for `std.fmt.parseInt` and `std.fmt.parseFloat` relevant to this version. Once I have this information, I'll have a better understanding of how to implement the calculator feature completely.
+
+Researching websites
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+zigtools.org
+ZLS 0.14.0 - zigtools
+
+reddit.com
+Where did everyone learn it : r/Zig - Reddit
+
+github.com
+0.14.1 Milestone - GitHub
+Number Parsing in Zig 0.14
+I've located the standard library documentation for Zig 0.14 and will now look into the specifics of the `std.fmt.parseInt` and `std.fmt.parseFloat` functions. This will give me the necessary details on how to convert strings to numbers within the calculator feature, including how to handle potential errors and what options are available for these functions.
+Calculator Implementation Ready
+With this information, I anticipate having a complete understanding of how to implement the calculator functionality in Zig 0.14, addressing the requirements for string to number conversion and error handling.
+Finalizing Calculator Research
+My next action is to browse the Zig 0.14 standard library documentation to get the details on `std.fmt.parseInt` and `std.fmt.parseFloat`. This will conclude my research into implementing the calculator feature for the MCP server.
+
+Researching websites
+
+ziglang.org
+Documentation - The Zig Programming Language
+Understanding MCP Primitives
+I've gained a deeper understanding of the core building blocks defined by the Model Context Protocol. These include 'Prompts' for providing instructions to language models, 'Resources' for supplying structured data, and 'Tools' which represent executable functions that the models can utilize. On the client side, 'Roots' offer an entry point to the client's file system, and 'Sampling' allows servers to request text generation from the client's language model.
+MCP Architecture
+The Model Context Protocol employs a client-server architecture. The AI application acts as the 'Host' and manages 'Clients' which connect to one or more 'Servers'. These servers provide access to specific functionalities like tools or data. This design helps in managing security and isolating different capabilities.
+Next Steps: Calculator Implementation
+Now that I have a clearer picture of the Model Context Protocol, I will return to the task of implementing the calculator functionality in Zig 0.14. My next step is to find the correct documentation for the `std.fmt.parseInt` and `std.fmt.parseFloat` functions within the Zig 0.14 standard library to ensure I can handle number parsing correctly.
+
+Researching websites
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+zigtools.org
+ZLS 0.14.0 - zigtools
+
+github.com
+0.14.1 Milestone - GitHub
+
+reddit.com
+Where did everyone learn it : r/Zig - Reddit
+Refining Search for Documentation
+My previous attempt to find the Zig 0.14 standard library documentation led me to the language reference instead. To correct this, I'm going to try a more specific search, explicitly including 'standard library' and 'documentation' along with the version number '0.14'. I'll also check the official Zig website to see if I can find it there.
+Next Steps: Exploring Number Parsing
+Once I locate the correct documentation, I plan to browse it to find the details for `std.fmt.parseInt` and `std.fmt.parseFloat`. Understanding how these functions work, including their parameters, return types, and error handling, is essential for implementing the calculator feature of the MCP server.
+
+Researching websites
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+ziglang.org
+std - Zig Documentation
+Standard Library Location
+I've realized that my previous search led me to the Zig language reference instead of the standard library documentation I need. I will now go back to the language reference page, as I recall seeing a link to the standard library there.
+Next Action: Browse for Details
+My next step is to browse the Zig 0.14 standard library documentation to find the specifics for the `std.fmt.parseInt` and `std.fmt.parseFloat` functions. This information is crucial for correctly implementing the calculator functionality in the MCP server.
+
+Researching websites
+
+ziglang.org
+std - Zig Documentation
+Revised Approach for Number Parsing
+I'm encountering difficulty in finding the exact documentation for `std.fmt.parseInt` and `std.fmt.parseFloat` in Zig 0.14. The standard library documentation I accessed appears to be a general template rather than version-specific. To overcome this, I've decided to look for practical examples of how these functions are used in Zig 0.14 code. This approach should give me the necessary understanding of their parameters, return types, and error handling for the calculator implementation.
+Next Action: Code Example Search
+My next step is to search for Zig 0.14 code examples that utilize `std.fmt.parseInt` and `std.fmt.parseFloat`. By examining these examples, I aim to gain a working knowledge of how to use these functions effectively in the calculator feature of the MCP server.
+
+Researching websites
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+stackoverflow.com
+How can I parse an integer from a string in Zig? - Stack Overflow
+
+zig.guide
+A Guessing Game | zig.guide
+
+github.com
+std.fmt.Parser.peek() potential problem and fix therefore · Issue #20500 · ziglang/zig - GitHub
+
+ziggit.dev
+Stuck with std.fmt.parseInt error - Help - Ziggit
+
+github.com
+std.fmt.parseFloat fails for very long strings · Issue #6245 · ziglang/zig - GitHub
+
+github.com
+`std.fmt.parseFloat` does not parse 9007199254740993.0 correctly · Issue #11169 · ziglang/zig - GitHub
+
+codesuji.com
+Dynamic Time Warping with Zig - codesuji
+
+reddit.com
+Bashing my head against a wall trying to read a file. : r/Zig - Reddit
+Calculator Implementation Details
+I've found examples of using `std.fmt.parseInt` and `std.fmt.parseFloat` in Zig 0.14. These examples, along with the information from the calculator tutorial I looked at earlier, have given me a good enough understanding of how to implement the calculator feature for the MCP server.
+Next Steps: Command Execution
+Now that I have a plan for the calculator, I will move on to researching how to execute system commands or subprocesses within a Zig 0.14 application. I'll be paying close attention to security considerations and how to manage the input and output of these subprocesses.
+
+Researching websites
+
+reddit.com
+0.14.0 is one month out - What to Expect from Release Month : r/Zig - Reddit
+
+ziggit.dev
+Zig 0.14.0 released - News - Ziggit
+
+stackoverflow.com
+Zig cross-compiling riscv64-linux-musl fails on Windows - Stack Overflow
+
+pypi.org
+ziglang - PyPI
+
+github.com
+SIGABRT in std.process.Child.run outside Debug mode · Issue #17704 · ziglang/zig - GitHub
+
+github.com
+Consider running tests in parallel by deafult · Issue #15953 · ziglang/zig - GitHub
+
+stackoverflow.com
+How to suppress or capture the output of subprocess.run()? - Stack Overflow
+
+reddit.com
+missing output from child process - Zig - Reddit
+
+reddit.com
+What are the breaking changes of 0.14 - Zig - Reddit
+
+youtube.com
+Here's a look at highly-upvoted issues and why they may not be in Zig 0.14 - YouTube
+
+ziggit.dev
+Redirecting stderr for each subprocess - Help - Ziggit
+
+github.com
+Terminating a build process does not terminate child processes · Issue #18340 · ziglang/zig
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+github.com
+0.14.1 Milestone - GitHub
+
+ziggit.dev
+Zigar 0.14.0: A major step forward in Zig-JavaScript interoperability - Showcase - Ziggit
+
+reddit.com
+Zigar 0.14.0: A major step forward in Zig-JavaScript interoperability - Reddit
+
+ziggit.dev
+Build.zig: depending on a file generated by system command - Help - Ziggit
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+github.com
+ringtailsoftware/zig-embshell: Small embeddable command line shell in zig - GitHub
+
+github.com
+std.process.Child is able to spawn non existend programs with no errors. #22737 - GitHub
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+
+zig.guide
+Emitting an Executable - zig.guide
+MCP Core Concepts
+I've been reviewing the Model Context Protocol (MCP) specification and have a better grasp of its fundamental components. I now understand the roles of 'Prompts', 'Resources', and 'Tools' as server-side primitives, and 'Roots' and 'Sampling' on the client side. The client-server architecture and the use of JSON-RPC 2.0 for communication are also clear to me.
+Zig Networking Progress
+I've made progress in understanding how to handle network connections in Zig 0.14. I've learned about using the standard library to create sockets, bind them to an address and port, and listen for incoming connections. I also have a basic understanding of accepting connections and reading/writing data.
+Next Steps: Subprocess Execution
+My next focus will be on researching how to implement the ability to execute system commands or subprocesses from within the Zig 0.14 server. I need to find information on how to do this securely and manage the input and output of these commands.
+
+Researching websites
+
+bigdatawire.com
+Will Model Context Protocol (MCP) Become the Standard for Agentic AI? - Datanami
+
+infoq.com
+Anthropic Publishes Model Context Protocol Specification for LLM App Integration - InfoQ
+
+wandb.ai
+The Model Context Protocol (MCP) by Anthropic: Origins, functionality, and impact - Wandb
+
+medium.com
+Anthropic's Model Context Protocol (MCP): A Deep Dive for Developers - Medium
+
+philschmid.de
+Model Context Protocol (MCP) an overview - Philschmid
+
+medium.com
+The Model Context Protocol (MCP) — A Complete Tutorial | by Dr. Nimrita Koul - Medium
+MCP Specification Insights
+I've gained a comprehensive understanding of Anthropic's Model Context Protocol (MCP) from the search results. I now know it's an open standard designed to connect AI models with external data and tools using a client-server architecture. The communication relies on JSON-RPC 2.0, and key features include primitives like Prompts, Resources, and Tools on the server side, and Roots and Sampling on the client side. This protocol aims to simplify the integration of AI with various systems.
+Next Steps: Deep Dive into Specification
+To proceed with building the MCP server, my next step is to thoroughly examine the official MCP specification document. This will involve understanding the precise message formats, data types, and the connection lifecycle defined by the protocol. This detailed knowledge is crucial for implementing the server correctly in Zig.
+
+Researching websites
+
+spec.modelcontextprotocol.io
+MCP Fundamentals
+I've now grasped the core principles of the Model Context Protocol (MCP). It's designed to be a universal way for AI models to interact with external resources like data sources and tools. The protocol uses a client-server model, with AI applications acting as clients and the resources as servers. Communication happens using a standard format called JSON-RPC 2.0.
+Key Protocol Components
+The MCP specification defines several important building blocks. On the server side, these include 'Prompts' for giving instructions, 'Resources' for providing data, and 'Tools' for executing actions. Clients, on the other hand, use 'Roots' to access file systems and 'Sampling' to request the AI model to generate text. Security and user control are built into the protocol.
+Next Steps: Zig Implementation
+With a solid understanding of the MCP specification, I will now focus on how to implement this in Zig 0.14. My immediate next steps involve researching how to handle JSON-RPC 2.0 communication in Zig without relying on external libraries, and how to set up a basic network server using Zig's standard library.
+
+Researching websites
+
+github.com
+Zig 0.14.0 was built/linked incorrectly for MacOS Sequoia · Issue #210073 - GitHub
+
+openmymind.net
+Custom String Formatting and JSON [De]Serializing in Zig
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+ziggit.dev
+Deserializing tagged JSON objects with metaprogramming - Help - Ziggit
+
+zigtools.org
+ZLS 0.14.0 - zigtools
+
+reddit.com
+Zig serialization library concept - Reddit
+
+youtube.com
+Text Editor in Zig : JSON-RPC API [#7] - YouTube
+
+github.com
+0.14.1 Milestone - GitHub
+
+ziggit.dev
+Need help and Suggestions Idiomatic Way of serialize/deserialize json accross the network TCP - Ziggit
+
+github.com
+std.json: Support for context in parse/stringify · Issue #16891 · ziglang/zig - GitHub
+
+zig.guide
+JSON - zig.guide
+
+ziglang.org
+Download - Zig Programming Language
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+
+ziggit.dev
+Zig 0.14.0 released - News - Ziggit
+
+jsonrpc.org
+JSON-RPC 2.0 Specification
+
+github.com
+pfeiferj/zig-json-rpc: WIP - GitHub
+JSON Support in Zig
+I've discovered that Zig 0.14 has built-in support for handling JSON data through its standard library, specifically the `std.json` module. This is very helpful as the Model Context Protocol uses JSON-RPC 2.0 for communication, so I can use these built-in features for serializing and deserializing messages.
+Exploring Zig's JSON Library
+My next step is to thoroughly investigate the `std.json` module in Zig 0.14. I need to understand how to use it to create and process JSON objects and arrays, which are fundamental to the JSON-RPC 2.0 protocol. I'll be looking into how to serialize data into JSON format and how to parse incoming JSON messages.
+Next Steps: Network Programming
+With the knowledge that Zig has built-in JSON support, I will now shift my focus to researching network programming in Zig 0.14. I need to learn how to establish network connections and handle the flow of data, which will be essential for building the MCP server.
+
+Researching websites
+
+ziglang.org
+std - Zig Documentation
+
+zig.guide
+JSON | zig.guide
+
+jsonrpc.org
+JSON-RPC 2.0 Specification
+JSON Handling in Zig
+I've found that Zig 0.14 provides built-in functionalities for working with JSON data. Specifically, the `std.json` module offers tools for parsing JSON from a slice of data and converting data structures into JSON strings. I've also seen basic examples of how to use these functions with different data types.
+Understanding JSON-RPC
+My research into the JSON-RPC 2.0 specification has given me a clear understanding of the protocol's structure, including the format of messages, the types of data it supports, and how it handles errors. This knowledge is essential for correctly implementing the communication part of the MCP server.
+Next Steps: Network Communication
+Now that I have a good grasp of JSON handling in Zig and the JSON-RPC protocol, my next step is to investigate network programming in Zig 0.14. I need to learn how to create a server that can listen for and manage network connections, which is crucial for building the MCP server.
+
+Researching websites
+
+wandb.ai
+The Model Context Protocol (MCP) by Anthropic: Origins, functionality, and impact - Wandb
+
+philschmid.de
+Model Context Protocol (MCP) an overview - Philschmid
+
+medium.com
+Anthropic's Model Context Protocol (MCP): A Deep Dive for Developers - Medium
+
+blog.apify.com
+What is Anthropic's Model Context Protocol (and why does it matter)? - Apify Blog
+
+medium.com
+The Model Context Protocol (MCP) — A Complete Tutorial | by Dr. Nimrita Koul - Medium
+
+composio.dev
+What is Model Context Protocol (MCP): Explained - Composio
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+ziggit.dev
+Zig 0.14.0 released - News - Ziggit
+
+youtube.com
+Zig 0.14's Labeled Switch is weird - YouTube
+
+ziglang.org
+Home Zig Programming Language
+
+github.com
+SIOCSIFFLAGS, SIOCGIFFLAGS missing from std.os.linux · Issue #20497 · ziglang/zig
+
+reddit.com
+How do I use Zig as Rust's Standard C Library? - Reddit
+
+zigcc.github.io
+Introduction - Zig cookbook
+
+github.com
+std.http.Client: unable to establish tls connection to GNU Savannah's git repository server · Issue #22650 · ziglang/zig - GitHub
+
+medium.com
+Zig TCP Server. So I've recently began a journey where… | by Andrew Poydence | Medium
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+
+openmymind.net
+TCP Server in Zig - Part 1 - Single Threaded
+
+ziggit.dev
+Zig async implementation - Explain - Ziggit
+
+github.com
+Zig 0.14 no longer works with mounted drives #20674 - GitHub
+Communication Methods
+I've learned that MCP servers can communicate with clients using standard input/output for local connections and HTTP via Server-Sent Events for remote connections. This means I need to figure out how to implement both of these in Zig 0.14.
+Zig Networking Research
+My research into Zig 0.14 networking has pointed me to the `std.net` module for creating network connections, specifically TCP sockets. I've also found examples of simple TCP servers in Zig that I can study to understand the basic structure.
+Next Steps in Zig
+My next steps involve exploring the official Zig 0.14.0 documentation for the `std.net` module, examining the TCP server examples I found, researching how to handle standard input/output in Zig, and investigating support for HTTP and Server-Sent Events in Zig 0.14's standard library.
+
+Researching websites
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+ziggit.dev
+Zig 0.14.0 released - News - Ziggit
+
+reddit.com
+Zigar 0.14.0: A major step forward in Zig-JavaScript interoperability - Reddit
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+ziglang.org
+0.14.0 Release Notes The Zig Programming Language
+
+zigcc.github.io
+Introduction - Zig cookbook
+
+reddit.com
+How to create, read and write files in Zig? - Reddit
+
+ziggit.dev
+Sockets with std.net in Zig 0.13.0 - Explain - Ziggit
+
+reddit.com
+Good way to write Zig code? - Reddit
+
+zouyee.medium.com
+zig-learning:A bunch of links to blog posts, articles, videos, etc for learning Zig | by zouyee
+
+github.com
+panic from `std.http.Server.Request.respond` when request exactly fills buffer and contains a body · Issue #20390 · ziglang/zig - GitHub
+
+zig.guide
+Readers and Writers - zig.guide
+
+github.com
+A collection of some awesome public Zig programming language projects. - GitHub
+
+medium.com
+Zig HTTP Server. If you're like me, then one of the… | by Andrew Poydence - Medium
+
+github.com
+0.14.1 Milestone - GitHub
+
+news.ycombinator.com
+Zig cookbook: collection of simple Zig programs that demonstrate good practices | Hacker News
+
+ziglang.org
+std - Zig Documentation
+
+medium.com
+Zig TCP Server. So I've recently began a journey where… | by ...
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+Zig Networking Insights
+I've been looking into network programming in Zig 0.14. I found that the `std.net` module exists, but the documentation snippet I received didn't have specific details. However, I did find examples of basic network programming that show how to create a listener, accept connections, and handle data streams. This gives me a foundation for the networking part of the MCP server.
+Handling Input and Output
+I've also learned how to manage standard input and output in Zig using functions like `std.io.getStdIn().reader()` and `std.io.getStdOut().writer()`. This is important because MCP can use standard I/O for communication. I also looked into reading until a specific character or the end of the input, and writing all the data.
+Communication Method Focus
+While I explored HTTP and Server-Sent Events, it seems there might not be built-in support for these in Zig 0.14's standard library. Given this, I'll focus on using standard input/output as the communication method for the MCP server, as this aligns with the goal of creating a minimal proof-of-concept application.
+Next Steps: Exploring Cookbook
+My next action is to delve into the Zig cookbook I found. I'm hoping to find more examples there related to network programming and how to handle JSON data in Zig 0.14, which will be crucial for implementing the MCP protocol.
+
+Researching websites
+
+zig.guide
+Installation | zig.guide
+
+zigtools.org
+ZLS 0.14.0 - zigtools
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+ziggit.dev
+Build.zig: depending on a file generated by system command - Help - Ziggit
+
+github.com
+Zig 0.14.0 was built/linked incorrectly for MacOS Sequoia · Issue #210073 - GitHub
+
+stackoverflow.com
+How to cast a runtime slice range to fixed array in zig 0.14.0? - Stack Overflow
+
+pypi.org
+ziglang - PyPI
+
+ziggit.dev
+Execute a program from zig - Help - Ziggit
+
+stackoverflow.com
+Get environment variable with default - Stack Overflow
+
+github.com
+zigcc/zig-cookbook: Simple Zig programs that demonstrate ... - GitHub
+Zig Cookbook Overview
+I've looked at the Zig cookbook repository and see that it contains examples on various topics. I'll need to explore the `src` directory to find specific examples related to network programming, handling JSON data, and potentially running other programs.
+Subprocess Execution in Zig 0.14
+My research indicates that Zig 0.14's `std.process` module provides the functionality to run and manage external commands. The `std.process.Child` struct appears to be key, offering methods to start, wait for, and get the output from these commands.
+Next Steps: Deeper Investigation
+I will now browse the `src` directory of the Zig cookbook repository to find examples related to TCP servers, standard input/output, JSON handling, and running processes. I also need to find the official documentation for the `std.process` module in Zig 0.14 to understand how to use it securely. Finally, I'll start thinking about how to implement the calculator feature in Zig 0.14.
+Subprocess Documentation
+I need to find the official documentation for the `std.process` module in Zig 0.14. This will help me understand the correct and secure way to run other programs from within my Zig server.
+Next Actions
+I will first try to access the Zig cookbook website again and navigate to the `src` directory. If this is still not working, I will search for specific examples within the cookbook related to network programming, JSON handling, and running external processes. I will also look for the official documentation for the `std.process` module in Zig 0.14.
+
+Researching websites
+
+pypi.org
+ziglang - PyPI
+
+stackoverflow.com
+Zig cross-compiling riscv64-linux-musl fails on Windows - Stack Overflow
+
+github.com
+SIGABRT in std.process.Child.run outside Debug mode · Issue #17704 · ziglang/zig - GitHub
+
+ziggit.dev
+Issues with vscode-zig zig path config and test runner - Help - Ziggit
+
+stackoverflow.com
+How to run shell commands which require input in zig? - Stack Overflow
+
+ziglang.org
+0.14.0 - Documentation - The Zig Programming Language
+
+github.com
+jcalabro/zig-cgo-example - GitHub
+
+ziglang.org
+Samples - Zig Programming Language
+
+daily.dev
+Zig announces version 0.14.0 - Daily.dev
+
+github.com
+ringtailsoftware/zig-embshell: Small embeddable command line shell in zig - GitHub
+
+zig.guide
+Zig Build - zig.guide
+
+github.com
+std.process.Child is able to spawn non existend programs with no errors. #22737 - GitHub
+
+reddit.com
+zig-docs-astro - Precompiled Zig Documentation for Better SEO and LLM Integration - Reddit
+
+reddit.com
+Where did everyone learn it : r/Zig - Reddit
+
+github.com
+zigcc/zig-cookbook: Simple Zig programs that demonstrate ... - GitHub
+Zig Cookbook Insights
+Looking at the Zig cookbook, I see it's organized with examples in the `src` directory, which seems relevant to my task. Although I couldn't directly view the contents, I can use this knowledge to refine my searches for specific code examples.
+Subprocess Handling
+I've found that Zig 0.14 has a `std.process` module, and the `std.process.Child` appears to be the way to execute external commands. While the official documentation for this specific version wasn't readily available in the search results, I did find discussions and code snippets showing how to use it.
+Next Steps
+I will now try to find specific examples in the Zig cookbook for creating a TCP server, handling standard input/output, working with JSON, and executing processes. I also plan to further investigate the usage of `std.process.Child` based on the information I've already found to implement the CLI tool.
+
+Researching websites
+
+zigcc.github.io
+TCP Client - Zig cookbook
+
+zigcc.github.io
+Postgres - Zig cookbook
+
+news.ycombinator.com
+Zig cookbook: collection of simple Zig programs that demonstrate good practices | Hacker News
+
+medium.com
+Zig TCP Server. So I've recently began a journey where… | by Andrew Poydence | Medium
+
+openmymind.net
+Reading a JSON config in Zig
+
+github.com
+zig-cookbook/build.zig at main - GitHub
+
+zouyee.medium.com
+zig-learning:A bunch of links to blog posts, articles, videos, etc for learning Zig | by zouyee
+
+zig.guide
+JSON - zig.guide
+
+zig.guide
+Basic Event Loop Implementation | zig.guide
+
+zigcc.github.io
+Introduction - Zig cookbook
+
+github.com
+fubark/awesome-zig-1: Zig Learning & Usage Guide. - GitHub
+
+ziggit.dev
+Sockets with std.net in Zig 0.13.0 - Explain - Ziggit
+
+learnxinyminutes.com
+Learn Zig in Y Minutes
+
+stackoverflow.com
+how to set up a zig tcp server socket - Stack Overflow
+MCP Server Plan
+I'm now focusing on creating a detailed plan for building the MCP server. This involves outlining the specifics for the calculator tool, such as how it will receive input, perform calculations, and format its responses. Similarly, for the CLI tool, I'm planning how it will take commands, execute them, and return the output. I also need to detail how the server will handle incoming MCP messages and structure the overall project.
+Calculator Details
+For the calculator, I'm thinking about how it will receive input, likely as a string containing an arithmetic expression. I'll need to implement logic to parse this string, handle different mathematical operations, and perform the calculations, keeping in mind potential errors like invalid input. The result will then need to be formatted into a JSON-RPC response as defined by the MCP specification.
+Next Steps
+My next step is to elaborate on the detailed plan for the CLI/subprocess tool. This will involve specifying the expected input format, how to use Zig's capabilities to run external commands, how to securely capture their output, and how to structure the JSON-RPC response for this tool.
