@@ -102,3 +102,96 @@ test "PromptRegistry basic operations" {
     try std.testing.expect(prompt != null);
     try std.testing.expectEqualStrings("A greeting prompt", prompt.?.description.?);
 }
+
+test "PromptRegistry execute with handler" {
+    const allocator = std.testing.allocator;
+    var registry = PromptRegistry.init(allocator);
+    defer registry.deinit();
+
+    const handler: PromptHandlerFn = struct {
+        fn handler(_: std.mem.Allocator, args: ?std.json.Value) !PromptResult {
+            const name = if (args) |a| blk: {
+                if (a.object.get("name")) |n| {
+                    break :blk if (n == .string) n.string else "World";
+                }
+                break :blk "World";
+            } else "World";
+            _ = name;
+
+            return .{
+                .description = "Greeting message",
+                .messages = &[_]PromptMessage{
+                    .{ .role = "user", .content = "Hello!" },
+                },
+            };
+        }
+    }.handler;
+
+    try registry.register(.{
+        .name = "greet",
+        .description = "Generate a greeting",
+        .arguments = &[_]PromptArgument{
+            .{ .name = "name", .description = "Name to greet", .required = false },
+        },
+        .handler = handler,
+    });
+
+    const result = try registry.execute("greet", std.json.Value{ .object = std.json.ObjectMap.init(allocator) });
+    try std.testing.expectEqualStrings("Greeting message", result.description.?);
+    try std.testing.expectEqual(@as(usize, 1), result.messages.len);
+}
+
+test "PromptRegistry execute not found" {
+    const allocator = std.testing.allocator;
+    var registry = PromptRegistry.init(allocator);
+    defer registry.deinit();
+
+    try std.testing.expectError(error.PromptNotFound, registry.execute("nonexistent", null));
+}
+
+test "PromptRegistry execute no handler" {
+    const allocator = std.testing.allocator;
+    var registry = PromptRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.register(.{
+        .name = "no_handler",
+        .description = "No handler",
+    });
+
+    try std.testing.expectError(error.NoHandler, registry.execute("no_handler", null));
+}
+
+test "PromptRegistry list prompts" {
+    const allocator = std.testing.allocator;
+    var registry = PromptRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.register(.{ .name = "prompt1", .description = "First prompt" });
+    try registry.register(.{ .name = "prompt2", .description = "Second prompt" });
+
+    const count = registry.count();
+    try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "PromptArgument with all fields" {
+    const arg = PromptArgument{
+        .name = "test",
+        .description = "Test argument",
+        .required = true,
+    };
+
+    try std.testing.expectEqualStrings("test", arg.name);
+    try std.testing.expectEqualStrings("Test argument", arg.description.?);
+    try std.testing.expect(arg.required);
+}
+
+test "PromptArgument optional fields" {
+    const arg = PromptArgument{
+        .name = "optional",
+    };
+
+    try std.testing.expectEqualStrings("optional", arg.name);
+    try std.testing.expect(arg.description == null);
+    try std.testing.expect(!arg.required);
+}

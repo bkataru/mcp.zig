@@ -167,3 +167,41 @@ test "StderrLogger creates interface" {
     var logger = StderrLogger{ .prefix = "test" };
     _ = logger.asLogger();
 }
+
+test "StderrLogger with empty prefix" {
+    var logger = StderrLogger{};
+    _ = logger.asLogger();
+}
+
+test "Logger interface delegation" {
+    const TestLogger = struct {
+        var start_called = false;
+        var log_called = false;
+        var stop_called = false;
+
+        fn start(_: *@This(), _: []const u8) void {
+            start_called = true;
+        }
+        fn log(_: *@This(), _: []const u8, _: []const u8, _: []const u8) void {
+            log_called = true;
+        }
+        fn stop(_: *@This(), _: []const u8) void {
+            stop_called = true;
+        }
+    };
+
+    var custom = TestLogger{};
+    const l = Logger.from(&custom);
+
+    try std.testing.expect(!TestLogger.start_called);
+    try std.testing.expect(!TestLogger.log_called);
+    try std.testing.expect(!TestLogger.stop_called);
+
+    l.start("start message");
+    l.log("transport", "send", "test message");
+    l.stop("stop message");
+
+    try std.testing.expect(TestLogger.start_called);
+    try std.testing.expect(TestLogger.log_called);
+    try std.testing.expect(TestLogger.stop_called);
+}

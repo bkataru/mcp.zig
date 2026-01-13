@@ -416,8 +416,33 @@ test "Tool serialization" {
 }
 
 test "Content union" {
-    const content = textContent("Hello, world!");
-    try std.testing.expectEqualStrings("Hello, world!", content.text.text);
+    const text = Content{ .text = .{ .text = "Hello" } };
+    try std.testing.expectEqualStrings("Hello", text.text.text);
+
+    const image = Content{ .image = .{ .data = "base64", .mimeType = "image/png" } };
+    try std.testing.expectEqualStrings("image/png", image.image.mimeType);
+}
+
+test "CallToolResult with text content" {
+    const result = CallToolResult{
+        .content = &[_]Content{
+            .{ .text = .{ .text = "Hello, world!" } },
+        },
+    };
+
+    try std.testing.expect(result.content.len == 1);
+    try std.testing.expectEqualStrings("Hello, world!", result.content[0].text.text);
+}
+
+test "CallToolResult with multiple content" {
+    const result = CallToolResult{
+        .content = &[_]Content{
+            .{ .text = .{ .text = "Text result" } },
+            .{ .text = .{ .text = "Second result" } },
+        },
+    };
+
+    try std.testing.expect(result.content.len == 2);
 }
 
 test "validateMetadata - valid object" {
@@ -480,4 +505,130 @@ test "validateIconUri - invalid https URI" {
     try std.testing.expectError(error.InvalidHttpsUri, validateIconUri("https:"));
     try std.testing.expectError(error.InvalidHttpsUri, validateIconUri("https:/"));
     try std.testing.expectError(error.InvalidHttpsUri, validateIconUri("https:example.com"));
+}
+
+test "ServerCapabilities with all options" {
+    const allocator = std.testing.allocator;
+    var obj = std.json.ObjectMap.init(allocator);
+    defer obj.deinit();
+    const caps = ServerCapabilities{
+        .completions = std.json.Value{ .object = obj },
+        .experimental = null,
+        .logging = null,
+        .prompts = .{ .listChanged = true },
+        .resources = .{ .listChanged = true, .subscribe = true },
+        .tools = .{ .listChanged = true },
+    };
+
+    try std.testing.expect(caps.prompts != null);
+    try std.testing.expect(caps.resources != null);
+    try std.testing.expect(caps.tools != null);
+}
+
+test "ClientCapabilities with roots" {
+    const caps = ClientCapabilities{
+        .roots = .{ .listChanged = true },
+        .sampling = null,
+        .experimental = null,
+    };
+
+    try std.testing.expect(caps.roots != null);
+    try std.testing.expect(caps.roots.?.listChanged == true);
+}
+
+test "InitializeParams full" {
+    const allocator = std.testing.allocator;
+    _ = allocator;
+    const params = InitializeParams{
+        .protocolVersion = constants.MCP_PROTOCOL_VERSION,
+        .capabilities = .{
+            .roots = .{ .listChanged = true },
+        },
+        .clientInfo = .{
+            .name = "test-client",
+            .version = "1.0.0",
+        },
+    };
+
+    try std.testing.expectEqualStrings(constants.MCP_PROTOCOL_VERSION, params.protocolVersion);
+    try std.testing.expectEqualStrings("test-client", params.clientInfo.name);
+}
+
+test "InitializeResult with instructions" {
+    const result = InitializeResult{
+        .protocolVersion = constants.MCP_PROTOCOL_VERSION,
+        .capabilities = .{
+            .tools = .{ .listChanged = true },
+        },
+        .serverInfo = .{
+            .name = "test-server",
+            .version = "2.0.0",
+        },
+        .instructions = "Use tools to perform calculations",
+        ._meta = null,
+    };
+
+    try std.testing.expect(result.instructions != null);
+    try std.testing.expectEqualStrings("Use tools to perform calculations", result.instructions.?);
+}
+
+test "ListToolsResult serialization" {
+    const result = ListToolsResult{
+        .tools = &[_]Tool{
+            .{
+                .name = "test-tool",
+                .description = "A test tool",
+                .inputSchema = .{ .type = "object" },
+            },
+        },
+    };
+
+    try std.testing.expect(result.tools.len == 1);
+    try std.testing.expectEqualStrings("test-tool", result.tools[0].name);
+}
+
+test "PromptArgument full" {
+    const arg = PromptArgument{
+        .name = "name",
+        .description = "The name to greet",
+        .required = true,
+    };
+
+    try std.testing.expectEqualStrings("name", arg.name);
+    try std.testing.expect(arg.required == true);
+}
+
+test "PromptMessage with role" {
+    const msg = PromptMessage{
+        .role = .assistant,
+        .content = .{
+            .text = .{ .text = "Hello!" },
+        },
+    };
+
+    try std.testing.expect(msg.role == .assistant);
+    try std.testing.expectEqualStrings("Hello!", msg.content.text.text);
+}
+
+test "ResourceContent with blob" {
+    const content = ResourceContent{
+        .uri = "file:///data.bin",
+        .mimeType = "application/octet-stream",
+        .text = null,
+        .blob = "SGVsbG8gV29ybGQ=",
+    };
+
+    try std.testing.expect(content.blob != null);
+}
+
+test "ResourceContent with text" {
+    const content = ResourceContent{
+        .uri = "file:///readme.txt",
+        .mimeType = "text/plain",
+        .text = "Hello, world!",
+        .blob = null,
+    };
+
+    try std.testing.expect(content.text != null);
+    try std.testing.expectEqualStrings("Hello, world!", content.text.?);
 }

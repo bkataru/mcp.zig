@@ -56,19 +56,19 @@ pub const DispatchContext = struct {
 };
 
 /// Handler function signature
-pub const HandlerFn = *const fn (ctx: *DispatchContext, params: ?std.json.Value) anyerror!DispatchResult;
+pub const HandlerFn = *const fn (ctx: *const DispatchContext, params: ?std.json.Value) anyerror!DispatchResult;
 
 /// Hook function signatures
-pub const BeforeHookFn = *const fn (ctx: *DispatchContext) anyerror!void;
-pub const AfterHookFn = *const fn (ctx: *DispatchContext, result: DispatchResult) void;
-pub const ErrorHookFn = *const fn (ctx: *DispatchContext, err: anyerror) DispatchResult;
-pub const FallbackHookFn = *const fn (ctx: *DispatchContext) anyerror!DispatchResult;
+pub const BeforeHookFn = *const fn (ctx: *const DispatchContext) anyerror!void;
+pub const AfterHookFn = *const fn (ctx: *const DispatchContext, result: DispatchResult) void;
+pub const ErrorHookFn = *const fn (ctx: *const DispatchContext, err: anyerror) DispatchResult;
+pub const FallbackHookFn = *const fn (ctx: *const DispatchContext) anyerror!DispatchResult;
 
 /// Dispatcher interface - can be implemented by custom dispatchers
 pub const RequestDispatcher = struct {
     impl_ptr: *anyopaque,
-    dispatch_fn: *const fn (impl_ptr: *anyopaque, ctx: *DispatchContext) anyerror!DispatchResult,
-    dispatch_end_fn: *const fn (impl_ptr: *anyopaque, ctx: *DispatchContext) void,
+    dispatch_fn: *const fn (impl_ptr: *anyopaque, ctx: *const DispatchContext) anyerror!DispatchResult,
+    dispatch_end_fn: *const fn (impl_ptr: *anyopaque, ctx: *const DispatchContext) void,
 
     /// Create a dispatcher interface from an implementing object
     pub fn from(impl_obj: anytype) RequestDispatcher {
@@ -77,12 +77,12 @@ pub const RequestDispatcher = struct {
             @compileError("impl_obj should be a pointer, but its type is " ++ @typeName(ImplType));
 
         const Delegate = struct {
-            fn dispatch(impl_ptr: *anyopaque, ctx: *DispatchContext) anyerror!DispatchResult {
+            fn dispatch(impl_ptr: *anyopaque, ctx: *const DispatchContext) anyerror!DispatchResult {
                 const impl: ImplType = @ptrCast(@alignCast(impl_ptr));
                 return impl.dispatch(ctx);
             }
 
-            fn dispatchEnd(impl_ptr: *anyopaque, ctx: *DispatchContext) void {
+            fn dispatchEnd(impl_ptr: *anyopaque, ctx: *const DispatchContext) void {
                 const impl: ImplType = @ptrCast(@alignCast(impl_ptr));
                 return impl.dispatchEnd(ctx);
             }
@@ -95,11 +95,11 @@ pub const RequestDispatcher = struct {
         };
     }
 
-    pub fn dispatch(self: RequestDispatcher, ctx: *DispatchContext) anyerror!DispatchResult {
+    pub fn dispatch(self: RequestDispatcher, ctx: *const DispatchContext) anyerror!DispatchResult {
         return self.dispatch_fn(self.impl_ptr, ctx);
     }
 
-    pub fn dispatchEnd(self: RequestDispatcher, ctx: *DispatchContext) void {
+    pub fn dispatchEnd(self: RequestDispatcher, ctx: *const DispatchContext) void {
         return self.dispatch_end_fn(self.impl_ptr, ctx);
     }
 };
@@ -150,7 +150,7 @@ pub const MethodRegistry = struct {
     }
 
     /// Dispatch a request to the appropriate handler
-    pub fn dispatch(self: *MethodRegistry, ctx: *DispatchContext) anyerror!DispatchResult {
+    pub fn dispatch(self: *MethodRegistry, ctx: *const DispatchContext) anyerror!DispatchResult {
         // Call before hook
         if (self.before_hook) |hook| {
             try hook(ctx);
@@ -187,7 +187,7 @@ pub const MethodRegistry = struct {
     }
 
     /// Called after dispatch completes (for cleanup)
-    pub fn dispatchEnd(self: *MethodRegistry, ctx: *DispatchContext) void {
+    pub fn dispatchEnd(self: *MethodRegistry, ctx: *const DispatchContext) void {
         _ = self;
         _ = ctx;
         // Per-request cleanup can be done here
@@ -201,13 +201,13 @@ pub const MethodRegistry = struct {
 
 // ==================== Tests ====================
 
-fn testHandler(ctx: *DispatchContext, params: ?std.json.Value) anyerror!DispatchResult {
+fn testHandler(ctx: *const DispatchContext, params: ?std.json.Value) anyerror!DispatchResult {
     _ = params;
     _ = ctx;
     return DispatchResult.withResult("{\"hello\":\"world\"}");
 }
 
-fn testErrorHandler(_: *DispatchContext, _: ?std.json.Value) anyerror!DispatchResult {
+fn testErrorHandler(_: *const DispatchContext, _: ?std.json.Value) anyerror!DispatchResult {
     return error.TestError;
 }
 
@@ -219,7 +219,7 @@ test "MethodRegistry dispatches to handler" {
     try registry.add("test", testHandler);
 
     const request = jsonrpc.Request{ .method = "test" };
-    var ctx = DispatchContext{
+    const ctx = DispatchContext{
         .allocator = allocator,
         .request = &request,
     };
@@ -234,7 +234,7 @@ test "MethodRegistry returns error for unknown method" {
     defer registry.deinit();
 
     const request = jsonrpc.Request{ .method = "unknown" };
-    var ctx = DispatchContext{
+    const ctx = DispatchContext{
         .allocator = allocator,
         .request = &request,
     };
@@ -242,4 +242,174 @@ test "MethodRegistry returns error for unknown method" {
     const result = try registry.dispatch(&ctx);
     try std.testing.expect(result == .err);
     try std.testing.expectEqual(jsonrpc.ErrorCode.MethodNotFound, result.err.code);
+}
+
+var before_hook_called = false;
+var after_hook_called = false;
+var error_hook_called = false;
+var fallback_hook_called = false;
+
+fn beforeHook(ctx: *const DispatchContext) anyerror!void {
+    _ = ctx;
+    before_hook_called = true;
+}
+
+fn afterHook(ctx: *const DispatchContext, result: DispatchResult) void {
+    _ = ctx;
+    _ = result;
+    after_hook_called = true;
+}
+
+fn errorHook(_: *const DispatchContext, err: anyerror) DispatchResult {
+    _ = err catch {};
+    error_hook_called = true;
+    return DispatchResult.withError(-1, "Error hook called");
+}
+
+fn fallbackHook(ctx: *const DispatchContext) anyerror!DispatchResult {
+    _ = ctx;
+    fallback_hook_called = true;
+    return DispatchResult.withResult("fallback");
+}
+
+fn countingHandler(_: *const DispatchContext, _: ?std.json.Value) anyerror!DispatchResult {
+    return DispatchResult.withResult("counted");
+}
+
+test "MethodRegistry onBefore hook" {
+    const allocator = std.testing.allocator;
+    var registry = MethodRegistry.init(allocator);
+    defer registry.deinit();
+
+    before_hook_called = false;
+    try registry.add("count", countingHandler);
+    registry.setOnBefore(beforeHook);
+
+    const request = jsonrpc.Request{ .method = "count" };
+    const ctx = DispatchContext{
+        .allocator = allocator,
+        .request = &request,
+    };
+
+    _ = try registry.dispatch(&ctx);
+    try std.testing.expect(before_hook_called);
+}
+
+test "MethodRegistry onAfter hook" {
+    const allocator = std.testing.allocator;
+    var registry = MethodRegistry.init(allocator);
+    defer registry.deinit();
+
+    after_hook_called = false;
+    try registry.add("count", countingHandler);
+    registry.setOnAfter(afterHook);
+
+    const request = jsonrpc.Request{ .method = "count" };
+    const ctx = DispatchContext{
+        .allocator = allocator,
+        .request = &request,
+    };
+
+    _ = try registry.dispatch(&ctx);
+    try std.testing.expect(after_hook_called);
+}
+
+test "MethodRegistry onError hook" {
+    const allocator = std.testing.allocator;
+    var registry = MethodRegistry.init(allocator);
+    defer registry.deinit();
+
+    error_hook_called = false;
+    try registry.add("error", testErrorHandler);
+    registry.setOnError(errorHook);
+
+    const request = jsonrpc.Request{ .method = "error" };
+    const ctx = DispatchContext{
+        .allocator = allocator,
+        .request = &request,
+    };
+
+    _ = registry.dispatch(&ctx) catch {};
+    try std.testing.expect(error_hook_called);
+}
+
+test "MethodRegistry onFallback hook" {
+    const allocator = std.testing.allocator;
+    var registry = MethodRegistry.init(allocator);
+    defer registry.deinit();
+
+    fallback_hook_called = false;
+    registry.setOnFallback(fallbackHook);
+
+    const request = jsonrpc.Request{ .method = "nonexistent" };
+    const ctx = DispatchContext{
+        .allocator = allocator,
+        .request = &request,
+    };
+
+    const result = try registry.dispatch(&ctx);
+    try std.testing.expect(fallback_hook_called);
+    try std.testing.expectEqualStrings("fallback", result.result);
+}
+
+test "DispatchContext with id" {
+    const allocator = std.testing.allocator;
+    const request = jsonrpc.Request{
+        .method = "test",
+        .id = jsonrpc.RequestId{ .integer = 42 },
+    };
+    const ctx = DispatchContext{
+        .allocator = allocator,
+        .request = &request,
+    };
+
+    try std.testing.expect(ctx.request.id != null);
+    try std.testing.expectEqual(@as(i64, 42), ctx.request.id.?.integer);
+}
+
+test "DispatchContext with string id" {
+    const allocator = std.testing.allocator;
+    const request = jsonrpc.Request{
+        .method = "test",
+        .id = jsonrpc.RequestId{ .string = "test-id" },
+    };
+    const ctx = DispatchContext{
+        .allocator = allocator,
+        .request = &request,
+    };
+
+    try std.testing.expectEqualStrings("test-id", ctx.request.id.?.string);
+}
+
+test "DispatchContext without id (notification)" {
+    const allocator = std.testing.allocator;
+    const request = jsonrpc.Request{
+        .method = "notify",
+        .id = null,
+    };
+    const ctx = DispatchContext{
+        .allocator = allocator,
+        .request = &request,
+    };
+
+    try std.testing.expect(ctx.request.id == null);
+}
+
+test "DispatchResult with error and data" {
+    const result = DispatchResult{
+        .err = .{
+            .code = -32600,
+            .message = "Invalid request",
+            .data = "extra info",
+        },
+    };
+
+    try std.testing.expectEqual(@as(i32, -32600), result.err.code);
+    try std.testing.expectEqualStrings("Invalid request", result.err.message);
+    try std.testing.expectEqualStrings("extra info", result.err.data.?);
+}
+
+test "DispatchResult null result" {
+    const result = DispatchResult{ .none = {} };
+    try std.testing.expect(result == .none);
 }

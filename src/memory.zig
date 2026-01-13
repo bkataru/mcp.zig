@@ -204,3 +204,95 @@ pub const MemoryTracker = struct {
         stats.print();
     }
 };
+
+// ==================== Tests ====================
+
+test "RequestArena basic operations" {
+    const allocator = std.testing.allocator;
+    var arena = RequestArena.init(allocator);
+    defer arena.deinit();
+
+    const alloc = arena.allocator();
+    const slice = try alloc.alloc(u8, 10);
+    defer alloc.free(slice);
+
+    try std.testing.expectEqual(@as(usize, 10), slice.len);
+}
+
+test "RequestArena reset" {
+    const allocator = std.testing.allocator;
+    var arena = RequestArena.init(allocator);
+    defer arena.deinit();
+
+    const alloc = arena.allocator();
+    const slice1 = try alloc.alloc(u8, 100);
+    const slice2 = try alloc.alloc(u8, 50);
+    _ = slice1;
+    _ = slice2;
+
+    arena.reset();
+
+    const slice3 = try alloc.alloc(u8, 200);
+    defer alloc.free(slice3);
+
+    try std.testing.expectEqual(@as(usize, 200), slice3.len);
+}
+
+test "ScopedArena acquire and release" {
+    const allocator = std.testing.allocator;
+    var pool = try ArenaPool.init(allocator, 2);
+    defer pool.deinit();
+
+    {
+        var scoped = try ScopedArena.init(&pool);
+        defer scoped.deinit();
+
+        const alloc = scoped.allocator();
+        const slice = try alloc.alloc(u8, 50);
+        defer alloc.free(slice);
+
+        try std.testing.expectEqual(@as(usize, 50), slice.len);
+    }
+
+    try std.testing.expectEqual(@as(usize, 2), pool.arenas.items.len);
+    try std.testing.expectEqual(@as(usize, 2), pool.available.items.len);
+}
+
+test "MemoryTracker" {
+    var tracker = MemoryTracker.init();
+
+    try std.testing.expectEqual(@as(u64, 0), tracker.stats.total_allocations);
+
+    tracker.recordAllocation();
+    try std.testing.expectEqual(@as(u64, 1), tracker.stats.total_allocations);
+
+    tracker.recordDeallocation();
+    try std.testing.expectEqual(@as(u64, 1), tracker.stats.total_deallocations);
+}
+
+test "ArenaPool init" {
+    const allocator = std.testing.allocator;
+    var pool = try ArenaPool.init(allocator, 4);
+    defer pool.deinit();
+
+    try std.testing.expectEqual(@as(usize, 4), pool.arenas.items.len);
+    try std.testing.expectEqual(@as(usize, 4), pool.available.items.len);
+}
+
+test "ArenaPool acquire and release" {
+    const allocator = std.testing.allocator;
+    var pool = try ArenaPool.init(allocator, 2);
+    defer pool.deinit();
+
+    const arena1 = try pool.acquire();
+    try std.testing.expectEqual(@as(usize, 1), pool.available.items.len);
+
+    const arena2 = try pool.acquire();
+    try std.testing.expectEqual(@as(usize, 0), pool.available.items.len);
+
+    try pool.release(arena1);
+    try std.testing.expectEqual(@as(usize, 1), pool.available.items.len);
+
+    try pool.release(arena2);
+    try std.testing.expectEqual(@as(usize, 2), pool.available.items.len);
+}

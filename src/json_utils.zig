@@ -35,7 +35,16 @@ pub const ResponseBuilder = struct {
             try response_map.put("id", id_val);
         }
 
-        return jsonStringifyAlloc(self.allocator, response_map);
+        var out: std.io.Writer.Allocating = .init(self.allocator);
+        errdefer out.deinit();
+        var stringify: std.json.Stringify = .{
+            .writer = &out.writer,
+        };
+        try stringify.write(std.json.Value{ .object = response_map });
+        const response = out.toOwnedSlice();
+        response_map.deinit();
+
+        return response;
     }
 
     /// Create a JSON-RPC error response
@@ -46,31 +55,47 @@ pub const ResponseBuilder = struct {
 
         var response_map = std.json.ObjectMap.init(self.allocator);
         try response_map.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
-        try response_map.put("error", error_obj);
+        try response_map.put("error", std.json.Value{ .object = error_obj });
 
         if (id) |id_val| {
             try response_map.put("id", id_val);
         }
 
-        return jsonStringifyAlloc(self.allocator, response_map);
+        var out: std.io.Writer.Allocating = .init(self.allocator);
+        errdefer out.deinit();
+        var stringify: std.json.Stringify = .{
+            .writer = &out.writer,
+        };
+        try stringify.write(std.json.Value{ .object = response_map });
+        const result = out.toOwnedSlice();
+
+        response_map.deinit();
+        error_obj.deinit();
+
+        return result;
     }
 
     /// Create a tool response with content
     pub fn toolResponse(self: @This(), id: ?std.json.Value, text_content: []const u8, is_error: bool) ![]const u8 {
         var content_array = std.json.Array.init(self.allocator);
-        var content_obj = std.json.Value{ .object = std.json.ObjectMap.init(self.allocator) };
-        try content_obj.object.put("type", std.json.Value{ .string = "text" });
-        try content_obj.object.put("text", std.json.Value{ .string = text_content });
-        try content_array.append(content_obj);
+        var content_obj = std.json.ObjectMap.init(self.allocator);
+        try content_obj.put("type", std.json.Value{ .string = "text" });
+        try content_obj.put("text", std.json.Value{ .string = text_content });
+        try content_array.append(std.json.Value{ .object = content_obj });
 
-        var result = std.json.Value{ .object = std.json.ObjectMap.init(self.allocator) };
-        try result.object.put("content", std.json.Value{ .array = content_array });
+        var result = std.json.ObjectMap.init(self.allocator);
+        try result.put("content", std.json.Value{ .array = content_array });
 
         if (is_error) {
-            try result.object.put("isError", std.json.Value{ .bool = true });
+            try result.put("isError", std.json.Value{ .bool = true });
         }
 
-        return self.success(id, result);
+        const response = try self.success(id, std.json.Value{ .object = result });
+        result.deinit();
+        content_obj.deinit();
+        content_array.deinit();
+
+        return response;
     }
 
     /// Create initialize response
@@ -84,7 +109,11 @@ pub const ResponseBuilder = struct {
         try result_map.put("capabilities", std.json.Value{ .object = capabilities_map });
         try result_map.put("serverInfo", std.json.Value{ .object = server_info_map });
 
-        return self.success(id, result_map);
+        const response = try self.success(id, std.json.Value{ .object = result_map });
+        result_map.deinit();
+        server_info_map.deinit();
+
+        return response;
     }
 };
 
@@ -99,3 +128,38 @@ pub const ErrorCodes = struct {
     pub const unknown_protocol_version = -32098;
     pub const unknown_tool = -32097;
 };
+
+// ==================== Tests ====================
+
+test "jsonStringifyAlloc with string" {
+    const allocator = std.testing.allocator;
+
+    const result = try jsonStringifyAlloc(allocator, std.json.Value{ .string = "test" });
+    defer allocator.free(result);
+
+    try std.testing.expect(std.mem.indexOf(u8, result, "test") != null);
+}
+
+test "ResponseBuilder errorResponse" {
+    const allocator = std.testing.allocator;
+    var builder = ResponseBuilder.init(allocator);
+
+    const response = try builder.errorResponse(std.json.Value{ .integer = 1 }, -32601, "Method not found");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "jsonrpc") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "-32601") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "Method not found") != null);
+}
+
+test "ResponseBuilder toolResponse" {
+    const allocator = std.testing.allocator;
+    var builder = ResponseBuilder.init(allocator);
+
+    const response = try builder.toolResponse(std.json.Value{ .integer = 1 }, "test result", false);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.indexOf(u8, response, "content") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "text") != null);
+    try std.testing.expect(std.mem.indexOf(u8, response, "test result") != null);
+}
