@@ -334,12 +334,26 @@ test "ProgressBuilder create progress notification" {
     var builder = ProgressBuilder.init(allocator);
     const token = ProgressToken{ .integer = 42 };
     var notification = try builder.createProgress(token, 0.5, "Halfway done", 5.0);
-    defer @constCast(&notification).object.deinit();
 
     try std.testing.expect(notification == .object);
     const obj = notification.object;
     try std.testing.expectEqualStrings("2.0", obj.get("jsonrpc").?.string);
     try std.testing.expectEqualStrings("notifications/progress", obj.get("method").?.string);
+
+    // Clean up nested objects: value (progress_obj), params, notification
+    if (obj.getPtr("params")) |params_ptr| {
+        if (params_ptr.* == .object) {
+            if (params_ptr.object.getPtr("value")) |value_ptr| {
+                if (value_ptr.* == .object) {
+                    value_ptr.object.deinit();
+                }
+            }
+            params_ptr.object.deinit();
+        }
+    }
+    // Deinit main notification object
+    const notification_mut = @as(*std.json.Value, @ptrCast(&notification));
+    notification_mut.object.deinit();
 }
 
 test "ProgressBuilder create progress_end notification" {
@@ -347,12 +361,21 @@ test "ProgressBuilder create progress_end notification" {
     var builder = ProgressBuilder.init(allocator);
     const token = ProgressToken{ .string = "my-token" };
     var notification = try builder.createProgressEnd(token);
-    defer @constCast(&notification).object.deinit();
 
     try std.testing.expect(notification == .object);
     const obj = notification.object;
     try std.testing.expectEqualStrings("2.0", obj.get("jsonrpc").?.string);
     try std.testing.expectEqualStrings("notifications/progress/end", obj.get("method").?.string);
+
+    // Clean up nested objects: params, notification
+    if (obj.getPtr("params")) |params_ptr| {
+        if (params_ptr.* == .object) {
+            params_ptr.object.deinit();
+        }
+    }
+    // Deinit main notification object
+    const notification_mut = @as(*std.json.Value, @ptrCast(&notification));
+    notification_mut.object.deinit();
 }
 
 test "ProgressToken from JSON" {
