@@ -459,7 +459,7 @@ MIT License - see [LICENSE](LICENSE) for details.
 
 ## Related Projects
 
-- [MCP Specification](https://spec.modelcontextprotocol.io/)
+- [MCP Specification](https://modelcontextprotocol.io/specification/2025-11-25.md)
 - [MCP SDK (TypeScript)](https://github.com/modelcontextprotocol/typescript-sdk)
 - [MCP SDK (Python)](https://github.com/modelcontextprotocol/python-sdk)
 - [zigjr](https://github.com/williamw520/zigjr) - JSON-RPC library for Zig (architecture reference)
