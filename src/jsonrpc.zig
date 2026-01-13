@@ -317,11 +317,11 @@ pub const JsonRpc = struct {
             return buildErrorResponse(self.allocator, ErrorCode.InvalidRequest, "Method cannot be empty", req.id);
         }
 
-        if (std.mem.startsWith(u8, req.method, "tool.")) {
+        if (std.mem.startsWith(u8, req.method, "tools/")) {
             return self.handleToolRequest(req);
-        } else if (std.mem.startsWith(u8, req.method, "resource.")) {
+        } else if (std.mem.startsWith(u8, req.method, "resources/")) {
             return self.handleResourceRequest(req);
-        } else if (std.mem.startsWith(u8, req.method, "prompt.")) {
+        } else if (std.mem.startsWith(u8, req.method, "prompts/")) {
             return self.handlePromptRequest(req);
         }
 
@@ -330,7 +330,7 @@ pub const JsonRpc = struct {
 
     /// Handle tool requests with proper MCP tool serialization
     fn handleToolRequest(self: *@This(), req: Request) ![]const u8 {
-        const tool_name = req.method["tool.".len..];
+        const tool_name = req.method["tools/".len..];
         const params = req.params orelse return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Missing parameters", req.id);
 
         // Convert JSON values to strings for old tool API
@@ -363,13 +363,13 @@ pub const JsonRpc = struct {
         return buildResponse(self.allocator, req.id, json_result.value);
     }
 
-    /// Handle resource requests (resources/list, resources/read)
+    /// Handle resource requests (resources/list, resources/read, resources/subscribe, resources/unsubscribe)
     fn handleResourceRequest(self: *@This(), req: Request) ![]const u8 {
         const registry = self.resource_registry orelse {
             return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Resources not supported", req.id);
         };
 
-        const action = req.method["resource.".len..];
+        const action = req.method["resources/".len..];
 
         if (std.mem.eql(u8, action, "list")) {
             // Return list of available resources
@@ -431,6 +431,46 @@ pub const JsonRpc = struct {
             try result_obj.put("contents", std.json.Value{ .array = std.json.Array.fromOwnedSlice(self.allocator, contents_slice) });
 
             return buildResponse(self.allocator, req.id, std.json.Value{ .object = result_obj });
+        } else if (std.mem.eql(u8, action, "subscribe")) {
+            // Subscribe to resource updates
+            const params = req.params orelse return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Missing uri parameter", req.id);
+            const uri = if (params == .object) params.object.get("uri") else null;
+            if (uri == null or uri.? != .string) {
+                return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Invalid uri parameter", req.id);
+            }
+
+            // Create a simple callback (in real implementation, would notify client)
+            const dummy_callback = struct {
+                fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+            }.notify;
+
+            registry.subscribe(uri.?.string, dummy_callback) catch |err| {
+                return switch (err) {
+                    error.ResourceNotFound => buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Resource not found", req.id),
+                    error.SubscriptionsNotSupported => buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Subscriptions not supported", req.id),
+                    error.AlreadySubscribed => buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Already subscribed", req.id),
+                    else => buildErrorResponse(self.allocator, ErrorCode.InternalError, "Failed to subscribe", req.id),
+                };
+            };
+
+            const result_obj = std.json.ObjectMap.init(self.allocator);
+            return buildResponse(self.allocator, req.id, std.json.Value{ .object = result_obj });
+        } else if (std.mem.eql(u8, action, "unsubscribe")) {
+            // Unsubscribe from resource updates
+            const params = req.params orelse return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Missing uri parameter", req.id);
+            const uri = if (params == .object) params.object.get("uri") else null;
+            if (uri == null or uri.? != .string) {
+                return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Invalid uri parameter", req.id);
+            }
+
+            registry.unsubscribe(uri.?.string) catch |err| {
+                return switch (err) {
+                    error.NotSubscribed => buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Not subscribed", req.id),
+                };
+            };
+
+            const result_obj = std.json.ObjectMap.init(self.allocator);
+            return buildResponse(self.allocator, req.id, std.json.Value{ .object = result_obj });
         }
 
         return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Unknown resource action", req.id);
@@ -442,7 +482,7 @@ pub const JsonRpc = struct {
             return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Prompts not supported", req.id);
         };
 
-        const action = req.method["prompt.".len..];
+        const action = req.method["prompts/".len..];
 
         if (std.mem.eql(u8, action, "list")) {
             // Return list of available prompts
@@ -613,7 +653,7 @@ test "MCP tool request with tool not found" {
     const allocator = std.testing.allocator;
 
     const json =
-        \\{"jsonrpc":"2.0","method":"tool.calculate","params":{"expression":"2+2"},"id":1}
+        \\{"jsonrpc":"2.0","method":"tools/calculate","params":{"expression":"2+2"},"id":1}
     ;
 
     var tool_registry = ToolRegistry.init(allocator);
