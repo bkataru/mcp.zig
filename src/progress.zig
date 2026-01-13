@@ -48,7 +48,6 @@ pub const ProgressBuilder = struct {
 
     /// Create a progress notification
     pub fn createProgress(self: @This(), token: ProgressToken, progress: f64, message: ?[]const u8, eta_seconds: ?f64) !std.json.Value {
-        _ = token;
         var progress_obj = std.json.ObjectMap.init(self.allocator);
         try progress_obj.put("progress", std.json.Value{ .float = progress });
         if (message) |msg| {
@@ -72,7 +71,6 @@ pub const ProgressBuilder = struct {
 
     /// Create a progress_end notification
     pub fn createProgressEnd(self: @This(), token: ProgressToken) !std.json.Value {
-        _ = token;
         var notification = std.json.ObjectMap.init(self.allocator);
         try notification.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
         try notification.put("method", std.json.Value{ .string = "notifications/progress/end" });
@@ -85,7 +83,7 @@ pub const ProgressBuilder = struct {
     }
 
     /// Convert progress token to JSON value
-    fn progressTokenToJson(self: @This(), token: ProgressToken) !std.json.Value {
+    fn progressTokenToJson(_: @This(), token: ProgressToken) std.json.Value {
         return switch (token) {
             .string => |s| std.json.Value{ .string = s },
             .integer => |i| std.json.Value{ .integer = i },
@@ -93,7 +91,7 @@ pub const ProgressBuilder = struct {
     }
 
     /// Create a progress token from a JSON value
-    pub fn tokenFromJson(self: @This(), value: std.json.Value) !ProgressToken {
+    pub fn tokenFromJson(_: @This(), value: std.json.Value) !ProgressToken {
         return switch (value) {
             .string => |s| ProgressToken{ .string = s },
             .integer => |i| ProgressToken{ .integer = i },
@@ -121,7 +119,6 @@ pub const ProgressTracker = struct {
 
     /// Update progress and send notification
     pub fn update(self: *@This(), progress: f64, message: ?[]const u8, writer: std.io.AnyWriter) !void {
-        _ = message;
         self.current_progress = progress;
 
         const elapsed_seconds = @as(f64, @floatFromInt(std.time.nanoTimestamp() - self.start_time)) / @as(f64, std.time.ns_per_s);

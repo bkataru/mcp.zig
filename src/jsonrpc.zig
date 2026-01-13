@@ -725,3 +725,191 @@ test "Empty method validation" {
     // Check for error response about empty method
     try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "empty"));
 }
+
+test "buildResponse with null id" {
+    const allocator = std.testing.allocator;
+
+    const response = try buildResponse(allocator, null, std.json.Value{ .string = "test" });
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "null"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "test"));
+}
+
+test "buildResponse with string id" {
+    const allocator = std.testing.allocator;
+
+    const response = try buildResponse(allocator, RequestId{ .string = "abc-123" }, std.json.Value{ .integer = 42 });
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "abc-123"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "42"));
+}
+
+test "buildErrorResponse with null id" {
+    const allocator = std.testing.allocator;
+
+    const response = try buildErrorResponse(allocator, -32600, "Invalid request", null);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "null"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "-32600"));
+}
+
+test "RequestId eql with same type" {
+    const str_id1 = RequestId{ .string = "test" };
+    const str_id2 = RequestId{ .string = "test" };
+    const str_id3 = RequestId{ .string = "other" };
+
+    try std.testing.expect(str_id1.eql(str_id2));
+    try std.testing.expect(!str_id1.eql(str_id3));
+
+    const int_id1 = RequestId{ .integer = 42 };
+    const int_id2 = RequestId{ .integer = 42 };
+    const int_id3 = RequestId{ .integer = 99 };
+
+    try std.testing.expect(int_id1.eql(int_id2));
+    try std.testing.expect(!int_id1.eql(int_id3));
+}
+
+test "RequestId eql with different types" {
+    const str_id = RequestId{ .string = "42" };
+    const int_id = RequestId{ .integer = 42 };
+
+    try std.testing.expect(!str_id.eql(int_id));
+}
+
+test "Tool request with complex parameters" {
+    const allocator = std.testing.allocator;
+
+    const json =
+        \\{"jsonrpc":"2.0","method":"tools/call","params":{"name":"calculator","arguments":{"operation":"multiply","a":5,"b":3}},"id":1}
+    ;
+
+    var tool_registry = ToolRegistry.init(allocator);
+    defer tool_registry.deinit();
+
+    var rpc = JsonRpc.init(allocator, &tool_registry);
+    defer rpc.deinit();
+
+    const response = try rpc.handleRequest(json, 1);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "jsonrpc"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Tool not found"));
+}
+
+test "Resource list request" {
+    const allocator = std.testing.allocator;
+
+    const json =
+        \\{"jsonrpc":"2.0","method":"resources/list","params":{},"id":1}
+    ;
+
+    var tool_registry = ToolRegistry.init(allocator);
+    defer tool_registry.deinit();
+
+    var rpc = JsonRpc.init(allocator, &tool_registry);
+    defer rpc.deinit();
+
+    const response = try rpc.handleRequest(json, 1);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "jsonrpc"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Resources not supported"));
+}
+
+test "Resource read request" {
+    const allocator = std.testing.allocator;
+
+    const json =
+        \\{"jsonrpc":"2.0","method":"resources/read","params":{"uri":"file:///test.txt"},"id":1}
+    ;
+
+    var tool_registry = ToolRegistry.init(allocator);
+    defer tool_registry.deinit();
+
+    var rpc = JsonRpc.init(allocator, &tool_registry);
+    defer rpc.deinit();
+
+    const response = try rpc.handleRequest(json, 1);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "jsonrpc"));
+}
+
+test "Prompts list request" {
+    const allocator = std.testing.allocator;
+
+    const json =
+        \\{"jsonrpc":"2.0","method":"prompts/list","params":{},"id":1}
+    ;
+
+    var tool_registry = ToolRegistry.init(allocator);
+    defer tool_registry.deinit();
+
+    var rpc = JsonRpc.init(allocator, &tool_registry);
+    defer rpc.deinit();
+
+    const response = try rpc.handleRequest(json, 1);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "jsonrpc"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Prompts not supported"));
+}
+
+test "Invalid JSON handling" {
+    const allocator = std.testing.allocator;
+
+    const json = "not valid json at all";
+
+    var tool_registry = ToolRegistry.init(allocator);
+    defer tool_registry.deinit();
+
+    var rpc = JsonRpc.init(allocator, &tool_registry);
+    defer rpc.deinit();
+
+    const response = try rpc.handleRequest(json, 1);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "jsonrpc"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Invalid JSON"));
+}
+
+test "Missing parameters handling" {
+    const allocator = std.testing.allocator;
+
+    const json =
+        \\{"jsonrpc":"2.0","method":"tools/call","params":{},"id":1}
+    ;
+
+    var tool_registry = ToolRegistry.init(allocator);
+    defer tool_registry.deinit();
+
+    var rpc = JsonRpc.init(allocator, &tool_registry);
+    defer rpc.deinit();
+
+    const response = try rpc.handleRequest(json, 1);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Tool not found"));
+}
+
+test "Null params handling" {
+    const allocator = std.testing.allocator;
+
+    const json =
+        \\{"jsonrpc":"2.0","method":"tools/call","params":null,"id":1}
+    ;
+
+    var tool_registry = ToolRegistry.init(allocator);
+    defer tool_registry.deinit();
+
+    var rpc = JsonRpc.init(allocator, &tool_registry);
+    defer rpc.deinit();
+
+    const response = try rpc.handleRequest(json, 1);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "jsonrpc"));
+}

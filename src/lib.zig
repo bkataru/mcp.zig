@@ -84,9 +84,9 @@ pub const NopLogger = logger.NopLogger;
 pub const StderrLogger = logger.StderrLogger;
 pub const FileLogger = logger.FileLogger;
 
-// ==================== Legacy Modules ====================
+// ==================== Additional Modules ====================
 
-// Transport layer (legacy)
+// Transport layer
 pub const transport = @import("transport.zig");
 pub const Transport = transport.Transport;
 pub const StdioTransport = transport.StdioTransport;
@@ -109,29 +109,26 @@ pub const ArenaPool = memory.ArenaPool;
 pub const ScopedArena = memory.ScopedArena;
 pub const MemoryTracker = memory.MemoryTracker;
 
-// Core MCP server (legacy)
+// Core MCP server
 pub const mcp = @import("mcp.zig");
 pub const MCPServer = mcp.MCPServer;
 pub const MCPTool = mcp.MCPTool;
 pub const Session = mcp.Session;
 pub const ServerState = mcp.ServerState;
 
-// ==================== Primitives (Legacy) ====================
+// ==================== Primitives ====================
 
 pub const primitives = struct {
     pub const tool = @import("primitives/tool.zig");
-    pub const ToolLegacy = tool.Tool;
     pub const ToolRegistry = tool.ToolRegistry;
     pub const ToolHandlerFn = tool.ToolHandlerFn;
 
     pub const resource = @import("primitives/resource.zig");
-    pub const ResourceLegacy = resource.Resource;
     pub const ResourceRegistry = resource.ResourceRegistry;
     pub const ResourceContent = resource.ResourceContent;
     pub const ResourceHandlerFn = resource.ResourceHandlerFn;
 
     pub const prompt = @import("primitives/prompt.zig");
-    pub const PromptLegacy = prompt.Prompt;
     pub const PromptRegistry = prompt.PromptRegistry;
     pub const PromptArgument = prompt.PromptArgument;
     pub const PromptMessage = prompt.PromptMessage;

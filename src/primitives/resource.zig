@@ -250,3 +250,170 @@ test "ResourceRegistry get subscription count" {
     try registry.subscribe("file:///test.txt", callback);
     try std.testing.expectEqual(@as(usize, 1), registry.getSubscriptionCount("file:///test.txt"));
 }
+
+var notify_call_count: usize = 0;
+
+test "ResourceRegistry notifyUpdate" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    registry.supports_subscriptions = true;
+
+    notify_call_count = 0;
+
+    const callback = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {
+            notify_call_count += 1;
+        }
+    }.notify;
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+    });
+
+    try registry.subscribe("file:///test.txt", callback);
+    try registry.notifyUpdate("file:///test.txt");
+
+    try std.testing.expectEqual(@as(usize, 1), notify_call_count);
+}
+
+test "ResourceRegistry unsubscribe" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    registry.supports_subscriptions = true;
+
+    const callback = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+    }.notify;
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+    });
+
+    try registry.subscribe("file:///test.txt", callback);
+    try std.testing.expectEqual(@as(usize, 1), registry.getSubscriptionCount("file:///test.txt"));
+
+    try registry.unsubscribe("file:///test.txt");
+    try std.testing.expectEqual(@as(usize, 0), registry.getSubscriptionCount("file:///test.txt"));
+}
+
+test "ResourceRegistry multiple subscriptions" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    registry.supports_subscriptions = true;
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+    });
+    try registry.register(.{
+        .uri = "file:///other.txt",
+        .name = "Other File",
+    });
+
+    const callback1 = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+    }.notify;
+    const callback2 = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+    }.notify;
+
+    try registry.subscribe("file:///test.txt", callback1);
+    try registry.subscribe("file:///other.txt", callback2);
+    try std.testing.expectEqual(@as(usize, 1), registry.getSubscriptionCount("file:///test.txt"));
+    try std.testing.expectEqual(@as(usize, 1), registry.getSubscriptionCount("file:///other.txt"));
+}
+
+test "ResourceRegistry notify all subscribers" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    registry.supports_subscriptions = true;
+
+    notify_call_count = 0;
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+    });
+    try registry.register(.{
+        .uri = "file:///other.txt",
+        .name = "Other File",
+    });
+
+    const callback = struct {
+        fn notify(_: std.mem.Allocator, uri: []const u8) anyerror!void {
+            if (std.mem.eql(u8, uri, "file:///test.txt")) {
+                notify_call_count += 1;
+            }
+        }
+    }.notify;
+
+    try registry.subscribe("file:///test.txt", callback);
+    try registry.subscribe("file:///other.txt", callback);
+    try registry.notifyUpdate("file:///test.txt");
+
+    try std.testing.expectEqual(@as(usize, 1), notify_call_count);
+}
+
+test "ResourceRegistry list resources" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    try registry.register(.{
+        .uri = "file:///test1.txt",
+        .name = "Test 1",
+    });
+    try registry.register(.{
+        .uri = "file:///test2.txt",
+        .name = "Test 2",
+    });
+
+    const count = registry.count();
+
+    try std.testing.expectEqual(@as(usize, 2), count);
+}
+
+test "ResourceRegistry read resource" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    const handler = struct {
+        fn read(_: std.mem.Allocator, _: []const u8) anyerror!ResourceContent {
+            return .{
+                .uri = "file:///test.txt",
+                .mimeType = "text/plain",
+                .text = "Hello, world!",
+            };
+        }
+    }.read;
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+        .handler = handler,
+    });
+
+    const content = try registry.read("file:///test.txt");
+
+    try std.testing.expectEqualStrings("file:///test.txt", content.uri);
+    try std.testing.expectEqualStrings("Hello, world!", content.text.?);
+}
+
+test "ResourceRegistry read non-existent" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    try std.testing.expectError(error.ResourceNotFound, registry.read("file:///nonexistent.txt"));
+}
