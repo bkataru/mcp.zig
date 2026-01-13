@@ -1,8 +1,11 @@
 const std = @import("std");
 const Tool = @import("./primitives/tool.zig").Tool;
-const Resource = @import("./primitives/resource.zig").Resource;
 const ToolRegistry = @import("./primitives/tool.zig").ToolRegistry;
+const Resource = @import("./primitives/resource.zig").Resource;
+const ResourceRegistry = @import("./primitives/resource.zig").ResourceRegistry;
+const ResourceContent = @import("./primitives/resource.zig").ResourceContent;
 const Prompt = @import("./primitives/prompt.zig").Prompt;
+const PromptRegistry = @import("./primitives/prompt.zig").PromptRegistry;
 
 /// JSON-RPC protocol version
 pub const VERSION = "2.0";
@@ -244,6 +247,8 @@ pub fn buildErrorResponse(allocator: std.mem.Allocator, code: i32, message: []co
 pub const JsonRpc = struct {
     allocator: std.mem.Allocator,
     tool_registry: *ToolRegistry,
+    resource_registry: ?*ResourceRegistry = null,
+    prompt_registry: ?*PromptRegistry = null,
     active_connections: std.AutoHashMap(u32, void),
 
     /// Initialize JSON-RPC handler
@@ -251,6 +256,22 @@ pub const JsonRpc = struct {
         return .{
             .allocator = allocator,
             .tool_registry = tool_registry,
+            .active_connections = std.AutoHashMap(u32, void).init(allocator),
+        };
+    }
+
+    /// Initialize JSON-RPC handler with all registries
+    pub fn initFull(
+        allocator: std.mem.Allocator,
+        tool_registry: *ToolRegistry,
+        resource_registry: ?*ResourceRegistry,
+        prompt_registry: ?*PromptRegistry,
+    ) @This() {
+        return .{
+            .allocator = allocator,
+            .tool_registry = tool_registry,
+            .resource_registry = resource_registry,
+            .prompt_registry = prompt_registry,
             .active_connections = std.AutoHashMap(u32, void).init(allocator),
         };
     }
@@ -342,22 +363,163 @@ pub const JsonRpc = struct {
         return buildResponse(self.allocator, req.id, json_result.value);
     }
 
-    /// Handle resource requests with MCP resource parsing
+    /// Handle resource requests (resources/list, resources/read)
     fn handleResourceRequest(self: *@This(), req: Request) ![]const u8 {
-        _ = req.method["resource.".len..]; // Resource URI extraction placeholder
-        _ = req.params orelse return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Missing resource parameters", req.id);
+        const registry = self.resource_registry orelse {
+            return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Resources not supported", req.id);
+        };
 
-        // TODO: Implement resource handling
-        return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Resource handling not yet implemented", req.id);
+        const action = req.method["resource.".len..];
+
+        if (std.mem.eql(u8, action, "list")) {
+            // Return list of available resources
+            var resources_array = std.ArrayListUnmanaged(std.json.Value){};
+
+            var it = registry.resources.iterator();
+            while (it.next()) |entry| {
+                const resource = entry.value_ptr.*;
+                var resource_obj = std.json.ObjectMap.init(self.allocator);
+                try resource_obj.put("uri", std.json.Value{ .string = resource.uri });
+                try resource_obj.put("name", std.json.Value{ .string = resource.name });
+                if (resource.description) |desc| {
+                    try resource_obj.put("description", std.json.Value{ .string = desc });
+                }
+                if (resource.mimeType) |mime| {
+                    try resource_obj.put("mimeType", std.json.Value{ .string = mime });
+                }
+                try resources_array.append(self.allocator, std.json.Value{ .object = resource_obj });
+            }
+
+            var result_obj = std.json.ObjectMap.init(self.allocator);
+            const slice = try resources_array.toOwnedSlice(self.allocator);
+            try result_obj.put("resources", std.json.Value{ .array = std.json.Array.fromOwnedSlice(self.allocator, slice) });
+
+            return buildResponse(self.allocator, req.id, std.json.Value{ .object = result_obj });
+        } else if (std.mem.eql(u8, action, "read")) {
+            // Read a specific resource
+            const params = req.params orelse return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Missing uri parameter", req.id);
+            const uri = if (params == .object) params.object.get("uri") else null;
+            if (uri == null or uri.? != .string) {
+                return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Invalid uri parameter", req.id);
+            }
+
+            const content = registry.read(uri.?.string) catch |err| {
+                return switch (err) {
+                    error.ResourceNotFound => buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Resource not found", req.id),
+                    error.NoHandler => buildErrorResponse(self.allocator, ErrorCode.InternalError, "Resource has no handler", req.id),
+                    else => buildErrorResponse(self.allocator, ErrorCode.InternalError, "Failed to read resource", req.id),
+                };
+            };
+
+            var content_obj = std.json.ObjectMap.init(self.allocator);
+            try content_obj.put("uri", std.json.Value{ .string = content.uri });
+            if (content.mimeType) |mime| {
+                try content_obj.put("mimeType", std.json.Value{ .string = mime });
+            }
+            if (content.text) |text| {
+                try content_obj.put("text", std.json.Value{ .string = text });
+            }
+            if (content.blob) |blob| {
+                try content_obj.put("blob", std.json.Value{ .string = blob });
+            }
+
+            var contents_array = std.ArrayListUnmanaged(std.json.Value){};
+            try contents_array.append(self.allocator, std.json.Value{ .object = content_obj });
+
+            var result_obj = std.json.ObjectMap.init(self.allocator);
+            const contents_slice = try contents_array.toOwnedSlice(self.allocator);
+            try result_obj.put("contents", std.json.Value{ .array = std.json.Array.fromOwnedSlice(self.allocator, contents_slice) });
+
+            return buildResponse(self.allocator, req.id, std.json.Value{ .object = result_obj });
+        }
+
+        return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Unknown resource action", req.id);
     }
 
-    /// Handle prompt requests with MCP prompt handling
+    /// Handle prompt requests (prompts/list, prompts/get)
     fn handlePromptRequest(self: *@This(), req: Request) ![]const u8 {
-        _ = req.method["prompt.".len..]; // Prompt type extraction placeholder
-        _ = req.params orelse return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Missing prompt parameters", req.id);
+        const registry = self.prompt_registry orelse {
+            return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Prompts not supported", req.id);
+        };
 
-        // TODO: Implement prompt handling
-        return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Prompt handling not yet implemented", req.id);
+        const action = req.method["prompt.".len..];
+
+        if (std.mem.eql(u8, action, "list")) {
+            // Return list of available prompts
+            var prompts_array = std.ArrayListUnmanaged(std.json.Value){};
+
+            var it = registry.prompts.iterator();
+            while (it.next()) |entry| {
+                const prompt = entry.value_ptr.*;
+                var prompt_obj = std.json.ObjectMap.init(self.allocator);
+                try prompt_obj.put("name", std.json.Value{ .string = prompt.name });
+                if (prompt.description) |desc| {
+                    try prompt_obj.put("description", std.json.Value{ .string = desc });
+                }
+                if (prompt.arguments) |args| {
+                    var args_array = std.ArrayListUnmanaged(std.json.Value){};
+                    for (args) |arg| {
+                        var arg_obj = std.json.ObjectMap.init(self.allocator);
+                        try arg_obj.put("name", std.json.Value{ .string = arg.name });
+                        if (arg.description) |desc| {
+                            try arg_obj.put("description", std.json.Value{ .string = desc });
+                        }
+                        try arg_obj.put("required", std.json.Value{ .bool = arg.required });
+                        try args_array.append(self.allocator, std.json.Value{ .object = arg_obj });
+                    }
+                    const args_slice = try args_array.toOwnedSlice(self.allocator);
+                    try prompt_obj.put("arguments", std.json.Value{ .array = std.json.Array.fromOwnedSlice(self.allocator, args_slice) });
+                }
+                try prompts_array.append(self.allocator, std.json.Value{ .object = prompt_obj });
+            }
+
+            var result_obj = std.json.ObjectMap.init(self.allocator);
+            const prompts_slice = try prompts_array.toOwnedSlice(self.allocator);
+            try result_obj.put("prompts", std.json.Value{ .array = std.json.Array.fromOwnedSlice(self.allocator, prompts_slice) });
+
+            return buildResponse(self.allocator, req.id, std.json.Value{ .object = result_obj });
+        } else if (std.mem.eql(u8, action, "get")) {
+            // Get/execute a specific prompt
+            const params = req.params orelse return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Missing name parameter", req.id);
+            const name = if (params == .object) params.object.get("name") else null;
+            if (name == null or name.? != .string) {
+                return buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Invalid name parameter", req.id);
+            }
+
+            const arguments = if (params == .object) params.object.get("arguments") else null;
+
+            const result = registry.execute(name.?.string, arguments) catch |err| {
+                return switch (err) {
+                    error.PromptNotFound => buildErrorResponse(self.allocator, ErrorCode.InvalidParams, "Prompt not found", req.id),
+                    error.NoHandler => buildErrorResponse(self.allocator, ErrorCode.InternalError, "Prompt has no handler", req.id),
+                    else => buildErrorResponse(self.allocator, ErrorCode.InternalError, "Failed to execute prompt", req.id),
+                };
+            };
+
+            var messages_array = std.ArrayListUnmanaged(std.json.Value){};
+            for (result.messages) |msg| {
+                var msg_obj = std.json.ObjectMap.init(self.allocator);
+                try msg_obj.put("role", std.json.Value{ .string = msg.role });
+
+                var content_obj = std.json.ObjectMap.init(self.allocator);
+                try content_obj.put("type", std.json.Value{ .string = "text" });
+                try content_obj.put("text", std.json.Value{ .string = msg.content });
+                try msg_obj.put("content", std.json.Value{ .object = content_obj });
+
+                try messages_array.append(self.allocator, std.json.Value{ .object = msg_obj });
+            }
+
+            var result_obj = std.json.ObjectMap.init(self.allocator);
+            if (result.description) |desc| {
+                try result_obj.put("description", std.json.Value{ .string = desc });
+            }
+            const messages_slice = try messages_array.toOwnedSlice(self.allocator);
+            try result_obj.put("messages", std.json.Value{ .array = std.json.Array.fromOwnedSlice(self.allocator, messages_slice) });
+
+            return buildResponse(self.allocator, req.id, std.json.Value{ .object = result_obj });
+        }
+
+        return buildErrorResponse(self.allocator, ErrorCode.MethodNotFound, "Unknown prompt action", req.id);
     }
 
     pub fn deinit(self: *@This()) void {

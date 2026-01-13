@@ -347,10 +347,44 @@ fn handleMcpMethod(
 
 /// Handle initialize method
 fn handleInitialize(params: ?std.json.Value, id: ?std.json.Value, allocator: std.mem.Allocator) ![]const u8 {
-    _ = params; // TODO: Validate client capabilities
+    // Log client capabilities if provided (optional validation)
+    if (params) |p| {
+        if (p == .object) {
+            if (p.object.get("protocolVersion")) |version| {
+                if (version == .string) {
+                    std.log.info("Client protocol version: {s}", .{version.string});
+                }
+            }
+            if (p.object.get("clientInfo")) |info| {
+                if (info == .object) {
+                    const name = info.object.get("name");
+                    const ver = info.object.get("version");
+                    if (name != null and name.? == .string) {
+                        std.log.info("Client: {s}", .{name.?.string});
+                    }
+                    if (ver != null and ver.? == .string) {
+                        std.log.info("Client version: {s}", .{ver.?.string});
+                    }
+                }
+            }
+        }
+    }
+
+    // Build server capabilities
+    var tools_caps = std.json.ObjectMap.init(allocator);
+    try tools_caps.put("listChanged", std.json.Value{ .bool = true });
+
+    var resources_caps = std.json.ObjectMap.init(allocator);
+    try resources_caps.put("subscribe", std.json.Value{ .bool = false });
+    try resources_caps.put("listChanged", std.json.Value{ .bool = true });
+
+    var prompts_caps = std.json.ObjectMap.init(allocator);
+    try prompts_caps.put("listChanged", std.json.Value{ .bool = true });
 
     var capabilities_map = std.json.ObjectMap.init(allocator);
-    try capabilities_map.put("tools", std.json.Value{ .object = std.json.ObjectMap.init(allocator) });
+    try capabilities_map.put("tools", std.json.Value{ .object = tools_caps });
+    try capabilities_map.put("resources", std.json.Value{ .object = resources_caps });
+    try capabilities_map.put("prompts", std.json.Value{ .object = prompts_caps });
 
     var server_info_map = std.json.ObjectMap.init(allocator);
     try server_info_map.put("name", std.json.Value{ .string = "mcp-zig-server" });

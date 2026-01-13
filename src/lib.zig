@@ -125,9 +125,17 @@ pub const primitives = struct {
 
     pub const resource = @import("primitives/resource.zig");
     pub const ResourceLegacy = resource.Resource;
+    pub const ResourceRegistry = resource.ResourceRegistry;
+    pub const ResourceContent = resource.ResourceContent;
+    pub const ResourceHandlerFn = resource.ResourceHandlerFn;
 
     pub const prompt = @import("primitives/prompt.zig");
     pub const PromptLegacy = prompt.Prompt;
+    pub const PromptRegistry = prompt.PromptRegistry;
+    pub const PromptArgument = prompt.PromptArgument;
+    pub const PromptMessage = prompt.PromptMessage;
+    pub const PromptResult = prompt.PromptResult;
+    pub const PromptHandlerFn = prompt.PromptHandlerFn;
 };
 
 // Built-in tools
