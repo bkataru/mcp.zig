@@ -380,11 +380,35 @@ pub const Session = struct {
 
     /// Respond to capability discovery requests
     pub fn discoverCapabilities(self: *@This(), id: ?jsonrpc.Id) !void {
-        var capabilities = std.ArrayList(jsonrpc.Value).init(self.allocator);
-        defer capabilities.deinit();
+        _ = id;
+        // Build server capabilities response
+        var caps = std.StringHashMap(bool).init(self.allocator);
+        defer caps.deinit();
 
-        // TODO: Populate with actual capabilities
-        try self.connection.respond(id, capabilities.items);
+        // Tools capability
+        try caps.put("tools", true);
+        try caps.put("tools.listChanged", true);
+
+        // Resources capability (if resources are registered)
+        if (self.resources.count() > 0) {
+            try caps.put("resources", true);
+            try caps.put("resources.listChanged", true);
+        }
+
+        // Store in session capabilities
+        var it = caps.iterator();
+        while (it.next()) |entry| {
+            try self.capabilities.put(entry.key_ptr.*, entry.value_ptr.*);
+        }
+    }
+
+    /// Get server capabilities as a summary
+    pub fn getCapabilitiesSummary(self: *@This()) struct { tools: bool, resources: bool, prompts: bool } {
+        return .{
+            .tools = self.tools.count() > 0,
+            .resources = self.resources.count() > 0,
+            .prompts = false, // Can be extended when prompts are added to session
+        };
     }
 
     /// Clean up session resources
