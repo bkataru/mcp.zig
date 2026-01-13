@@ -19,28 +19,14 @@ pub fn main() !void {
 
     std.debug.print("Connected to MCP server at {any}\n", .{address});
 
-    // Create a basic initialize request
-    const request_json = .{
-        .jsonrpc = "2.0",
-        .id = 1,
-        .method = "initialize",
-        .params = .{
-            .protocolVersion = "2024-11-05",
-            .capabilities = .{},
-            .clientInfo = .{
-                .name = "mcp-client-example",
-                .version = "1.0.0",
-            },
-        },
-    };
-
-    const U8ArrayList = std.array_list.AlignedManaged(u8, null);
-    var request_buffer = U8ArrayList.init(allocator);
-    defer request_buffer.deinit();
-    try std.json.stringify(request_json, .{}, request_buffer.writer());
+    // Create a basic initialize request (hardcoded JSON for simplicity)
+    const request_json =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"mcp-client-example","version":"1.0.0"}}}
+        \\
+    ;
 
     // Send the request
-    const request_with_newline = try std.fmt.allocPrint(allocator, "{s}\n", .{request_buffer.items});
+    const request_with_newline = try std.fmt.allocPrint(allocator, "{s}\n", .{request_json});
     defer allocator.free(request_with_newline);
 
     _ = try stream.write(request_with_newline);

@@ -46,6 +46,26 @@ pub const ProgressBuilder = struct {
         return .{ .allocator = allocator };
     }
 
+    /// Free a notification JSON value created by this builder
+    pub fn freeNotification(_: @This(), notification: std.json.Value) void {
+        if (notification == .object) {
+            var obj = notification.object;
+            // Free params object if it exists
+            if (obj.getPtr("params")) |params_ptr| {
+                if (params_ptr.* == .object) {
+                    // Free nested value object in progress notifications
+                    if (params_ptr.object.getPtr("value")) |value_ptr| {
+                        if (value_ptr.* == .object) {
+                            value_ptr.object.deinit();
+                        }
+                    }
+                    params_ptr.object.deinit();
+                }
+            }
+            obj.deinit();
+        }
+    }
+
     /// Create a progress notification
     pub fn createProgress(self: @This(), token: ProgressToken, progress: f64, message: ?[]const u8, eta_seconds: ?f64) !std.json.Value {
         var progress_obj = std.json.ObjectMap.init(self.allocator);
@@ -231,6 +251,7 @@ pub const ProgressTracker = struct {
 
         var builder = ProgressBuilder.init(self.allocator);
         const notification = try builder.createProgress(self.token, progress, message, eta_seconds);
+        defer builder.freeNotification(notification);
 
         if (self.notifier) |notifier| {
             // Send notification asynchronously
@@ -267,6 +288,7 @@ pub const ProgressTracker = struct {
 
         var builder = ProgressBuilder.init(self.allocator);
         const notification = try builder.createProgress(self.token, progress, message, eta_seconds);
+        defer builder.freeNotification(notification);
 
         var out: std.io.Writer.Allocating = .init(self.allocator);
         defer out.deinit();
@@ -281,6 +303,7 @@ pub const ProgressTracker = struct {
     pub fn complete(self: *@This(), writer: std.io.AnyWriter) !void {
         var builder = ProgressBuilder.init(self.allocator);
         const notification = try builder.createProgressEnd(self.token);
+        defer builder.freeNotification(notification);
 
         if (self.notifier) |notifier| {
             // Send notification asynchronously
@@ -311,6 +334,7 @@ pub const ProgressTracker = struct {
 
         var builder = ProgressBuilder.init(self.allocator);
         const notification = try builder.createProgressEnd(self.token);
+        defer builder.freeNotification(notification);
 
         var out: std.io.Writer.Allocating = .init(self.allocator);
         defer out.deinit();
@@ -333,49 +357,37 @@ test "ProgressBuilder create progress notification" {
     const allocator = std.testing.allocator;
     var builder = ProgressBuilder.init(allocator);
     const token = ProgressToken{ .integer = 42 };
-    var notification = try builder.createProgress(token, 0.5, "Halfway done", 5.0);
+    const notification = try builder.createProgress(token, 0.5, "Halfway done", 5.0);
+    defer builder.freeNotification(notification);
 
     try std.testing.expect(notification == .object);
     const obj = notification.object;
     try std.testing.expectEqualStrings("2.0", obj.get("jsonrpc").?.string);
     try std.testing.expectEqualStrings("notifications/progress", obj.get("method").?.string);
 
-    // Clean up nested objects: value (progress_obj), params, notification
-    if (obj.getPtr("params")) |params_ptr| {
-        if (params_ptr.* == .object) {
-            if (params_ptr.object.getPtr("value")) |value_ptr| {
-                if (value_ptr.* == .object) {
-                    value_ptr.object.deinit();
-                }
-            }
-            params_ptr.object.deinit();
-        }
-    }
-    // Deinit main notification object
-    const notification_mut = @as(*std.json.Value, @ptrCast(&notification));
-    notification_mut.object.deinit();
+    const params = obj.get("params").?.object;
+    try std.testing.expectEqual(@as(i64, 42), params.get("token").?.integer);
+
+    const value = params.get("value").?.object;
+    try std.testing.expectEqual(@as(f64, 0.5), value.get("progress").?.float);
+    try std.testing.expectEqualStrings("Halfway done", value.get("message").?.string);
+    try std.testing.expectEqual(@as(f64, 5.0), value.get("eta_seconds").?.float);
 }
 
 test "ProgressBuilder create progress_end notification" {
     const allocator = std.testing.allocator;
     var builder = ProgressBuilder.init(allocator);
     const token = ProgressToken{ .string = "my-token" };
-    var notification = try builder.createProgressEnd(token);
+    const notification = try builder.createProgressEnd(token);
+    defer builder.freeNotification(notification);
 
     try std.testing.expect(notification == .object);
     const obj = notification.object;
     try std.testing.expectEqualStrings("2.0", obj.get("jsonrpc").?.string);
     try std.testing.expectEqualStrings("notifications/progress/end", obj.get("method").?.string);
 
-    // Clean up nested objects: params, notification
-    if (obj.getPtr("params")) |params_ptr| {
-        if (params_ptr.* == .object) {
-            params_ptr.object.deinit();
-        }
-    }
-    // Deinit main notification object
-    const notification_mut = @as(*std.json.Value, @ptrCast(&notification));
-    notification_mut.object.deinit();
+    const params = obj.get("params").?.object;
+    try std.testing.expectEqualStrings("my-token", params.get("token").?.string);
 }
 
 test "ProgressToken from JSON" {

@@ -28,7 +28,7 @@ fn runServer(allocator: std.mem.Allocator) !void {
     // This would normally be your MCP server implementation
     // For this example, we'll just simulate a simple echo server
 
-    var server = mcp.MCPServer.init(allocator);
+    var server = try mcp.MCPServer.init(allocator);
     defer server.deinit();
 
     // In a real implementation, you would:
@@ -42,7 +42,7 @@ fn runServer(allocator: std.mem.Allocator) !void {
     std.Thread.sleep(2 * std.time.ns_per_s);
 }
 
-fn runClient(allocator: std.mem.Allocator) !void {
+fn runClient(_: std.mem.Allocator) !void {
     std.debug.print("Starting MCP client...\n", .{});
 
     const address = try std.net.Address.parseIp4("127.0.0.1", 8081);
@@ -51,25 +51,13 @@ fn runClient(allocator: std.mem.Allocator) !void {
 
     std.debug.print("Client connected to server\n", .{});
 
-    // Send initialize request
-    const U8ArrayList = std.array_list.AlignedManaged(u8, null);
-    var init_buffer = U8ArrayList.init(allocator);
-    defer init_buffer.deinit();
-    try std.json.stringify(.{
-        .jsonrpc = "2.0",
-        .id = 1,
-        .method = "initialize",
-        .params = .{
-            .protocolVersion = "2024-11-05",
-            .capabilities = .{},
-            .clientInfo = .{
-                .name = "client-server-example",
-                .version = "1.0.0",
-            },
-        },
-    }, .{}, init_buffer.writer());
+    // Send initialize request (hardcoded JSON to avoid std.json.stringify issues)
+    const init_request =
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"client-server-example","version":"1.0.0"}}}
+        \\
+    ;
 
-    _ = try stream.write(init_buffer.items);
+    _ = try stream.write(init_request);
     _ = try stream.write("\n");
 
     std.debug.print("Sent initialize request\n", .{});
@@ -80,14 +68,11 @@ fn runClient(allocator: std.mem.Allocator) !void {
 
     std.debug.print("Received response: {s}\n", .{buffer[0..bytes_read]});
 
-    // Send a tools/list request
-    const tools_request = try std.json.stringifyAlloc(allocator, .{
-        .jsonrpc = "2.0",
-        .id = 2,
-        .method = "tools/list",
-        .params = .{},
-    }, .{});
-    defer allocator.free(tools_request);
+    // Send a tools/list request (hardcoded JSON to avoid std.json.stringify issues)
+    const tools_request =
+        \\{"jsonrpc":"2.0","id":2,"method":"tools/list","params":{}}
+        \\
+    ;
 
     _ = try stream.write(tools_request);
     _ = try stream.write("\n");
