@@ -27,7 +27,7 @@ Add this package to your `build.zig.zon`:
 ```zig
 .dependencies = .{
     .mcp = .{
-        .url = "https://github.com/yourusername/mcp.zig/archive/refs/heads/main.tar.gz",
+        .url = "https://github.com/bkataru/mcp.zig/archive/refs/heads/main.tar.gz",
         .hash = "...",
     },
 },
