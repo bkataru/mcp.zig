@@ -36,7 +36,21 @@ pub fn build(b: *std.Build) void {
     });
     b.installArtifact(server_exe);
 
-    // Run step
+    // Test client executable module
+    const test_client_mod = b.createModule(.{
+        .root_source_file = b.path("src/test_client.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Test client executable
+    const test_client_exe = b.addExecutable(.{
+        .name = "test_client",
+        .root_module = test_client_mod,
+    });
+    b.installArtifact(test_client_exe);
+
+    // Run server step
     const run_cmd = b.addRunArtifact(server_exe);
     run_cmd.step.dependOn(b.getInstallStep());
     if (b.args) |args| {
@@ -44,6 +58,15 @@ pub fn build(b: *std.Build) void {
     }
     const run_step = b.step("run", "Run the MCP server");
     run_step.dependOn(&run_cmd.step);
+
+    // Run test client step
+    const run_test_client = b.addRunArtifact(test_client_exe);
+    run_test_client.step.dependOn(b.getInstallStep());
+    if (b.args) |args| {
+        run_test_client.addArgs(args);
+    }
+    const test_client_step = b.step("test-client", "Run the integration test client");
+    test_client_step.dependOn(&run_test_client.step);
 
     // Unit tests for the library
     const lib_unit_tests = b.addTest(.{

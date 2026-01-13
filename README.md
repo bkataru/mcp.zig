@@ -179,6 +179,7 @@ mcp.zig/
 │   ├── errors.zig     # Error types and handling
 │   ├── config.zig     # Server configuration
 │   ├── memory.zig     # Memory management utilities
+│   ├── test_client.zig # Pure Zig integration test client
 │   │
 │   ├── primitives/    # MCP primitives
 │   │   ├── tool.zig       # Tool registration and execution
@@ -187,7 +188,6 @@ mcp.zig/
 │   └── tools/         # Built-in tools
 │       ├── calculator.zig
 │       └── cli.zig
-└── scripts/           # Integration test scripts
 ```
 
 ## API Reference
@@ -315,10 +315,31 @@ const transport = mcp.Transport.initFromStream(stream);
 
 ## Testing
 
-Run the test suite:
+Run the unit test suite:
 
 ```bash
 zig build test
+```
+
+### Integration Testing
+
+The project includes a pure Zig test client for integration testing:
+
+```bash
+# Build the test client
+zig build
+
+# Test stdio transport (spawns server automatically)
+zig build test-client -- --stdio
+
+# Test TCP transport (requires server to be running)
+# In terminal 1:
+zig build run -- --tcp
+# In terminal 2:
+zig build test-client -- --tcp
+
+# Show help
+zig build test-client -- --help
 ```
 
 ## Contributing
