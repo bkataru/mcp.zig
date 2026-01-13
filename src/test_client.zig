@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const builtin = @import("builtin");
+const constants = @import("constants.zig");
 
 const TestResult = struct {
     name: []const u8,
@@ -26,8 +27,8 @@ pub fn main() !void {
     defer std.process.argsFree(allocator, args);
 
     var mode: enum { stdio, tcp, help } = .help;
-    var host: []const u8 = "127.0.0.1";
-    var port: u16 = 8080;
+    var host: []const u8 = constants.DEFAULT_HOST;
+    var port: u16 = constants.DEFAULT_PORT;
 
     for (args[1..]) |arg| {
         if (std.mem.eql(u8, arg, "--stdio")) {
@@ -39,7 +40,7 @@ pub fn main() !void {
         } else if (std.mem.startsWith(u8, arg, "--host=")) {
             host = arg["--host=".len..];
         } else if (std.mem.startsWith(u8, arg, "--port=")) {
-            port = std.fmt.parseInt(u16, arg["--port=".len..], 10) catch 8080;
+            port = std.fmt.parseInt(u16, arg["--port=".len..], 10) catch constants.DEFAULT_PORT;
         }
     }
 
@@ -58,24 +59,26 @@ pub fn main() !void {
 }
 
 fn printHelp() void {
+    const default_port_str = comptime std.fmt.comptimePrint("{d}", .{constants.DEFAULT_PORT});
     const help =
-        \\MCP Test Client - Integration test for MCP server
-        \\
-        \\Usage:
-        \\  test_client [OPTIONS]
-        \\
-        \\Options:
-        \\  --stdio          Test stdio transport (spawns server process)
-        \\  --tcp            Test TCP transport (server must be running)
-        \\  --host=HOST      TCP host (default: 127.0.0.1)
-        \\  --port=PORT      TCP port (default: 8080)
-        \\  --help, -h       Show this help
-        \\
-        \\Examples:
-        \\  test_client --stdio
-        \\  test_client --tcp --host=127.0.0.1 --port=8080
-        \\
-    ;
+        comptime std.fmt.comptimePrint(
+            \\MCP Test Client - Integration test for MCP server
+            \\
+            \\Usage:
+            \\  test_client [OPTIONS]
+            \\
+            \\Options:
+            \\  --stdio          Test stdio transport (spawns server process)
+            \\  --tcp            Test TCP transport (server must be running)
+            \\  --host=HOST      TCP host (default: {s})
+            \\  --port=PORT      TCP port (default: {s})
+            \\  --help, -h       Show this help
+            \\
+            \\Examples:
+            \\  test_client --stdio
+            \\  test_client --tcp --host={s} --port={s}
+            \\
+        , .{ constants.DEFAULT_HOST, default_port_str, constants.DEFAULT_HOST, default_port_str });
     std.debug.print("{s}\n", .{help});
 }
 
@@ -108,7 +111,7 @@ fn testStdioTransport(allocator: std.mem.Allocator) !void {
     // Test 1: Initialize
     std.debug.print("Test 1: Initialize... ", .{});
     const init_result = try sendAndReceive(allocator, stdin, stdout,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"zig-test-client","version":"1.0.0"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"clientInfo":{"name":"zig-test-client","version":"1.0.0"}}}
     );
     defer allocator.free(init_result);
 
@@ -201,7 +204,7 @@ fn testTcpTransport(allocator: std.mem.Allocator, host: []const u8, port: u16) !
     // Test 1: Initialize
     std.debug.print("Test 1: Initialize... ", .{});
     const init_result = try sendAndReceiveTcp(allocator, stream,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"zig-tcp-client","version":"1.0.0"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"clientInfo":{"name":"zig-tcp-client","version":"1.0.0"}}}
     );
     defer allocator.free(init_result);
 

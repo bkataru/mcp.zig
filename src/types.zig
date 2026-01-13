@@ -1,15 +1,13 @@
 //! MCP Protocol Types
 //!
 //! Type definitions for the Model Context Protocol (MCP) specification.
-//! Based on the official schema: https://github.com/modelcontextprotocol/modelcontextprotocol/tree/main/schema
+//! Based on official schema: https://github.com/modelcontextprotocol/modelcontextprotocol/tree/main/schema
 //!
 //! These types can be automatically serialized/deserialized with std.json.
 
 const std = @import("std");
+const constants = @import("constants.zig");
 const Allocator = std.mem.Allocator;
-
-/// Protocol version string
-pub const PROTOCOL_VERSION = "2025-03-26";
 
 // ==================== Common Types ====================
 
@@ -64,7 +62,7 @@ pub const InitializeParams = struct {
 
 /// Result of initialize request
 pub const InitializeResult = struct {
-    protocolVersion: []const u8 = PROTOCOL_VERSION,
+    protocolVersion: []const u8 = constants.MCP_PROTOCOL_VERSION,
     capabilities: ServerCapabilities,
     serverInfo: Implementation,
     instructions: ?[]const u8 = null,
@@ -278,6 +276,121 @@ pub const LoggingMessage = struct {
     data: std.json.Value,
 };
 
+// ==================== Validation Functions ====================
+
+/// Validate metadata field (_meta) according to MCP spec
+/// Metadata must be an object containing only string keys and JSON values
+pub fn validateMetadata(meta: ?std.json.Value) error{
+    InvalidMetadataType,
+    InvalidMetadataKey,
+}!void {
+    if (meta == null) return;
+
+    const metadata = meta.?;
+    if (metadata != .object) {
+        return error.InvalidMetadataType;
+    }
+
+    var it = metadata.object.iterator();
+    while (it.next()) |entry| {
+        const key = entry.key_ptr.*;
+
+        if (key.len == 0) {
+            return error.InvalidMetadataKey;
+        }
+
+        for (key) |c| {
+            if (c < 32 or c > 126) {
+                return error.InvalidMetadataKey;
+            }
+        }
+    }
+}
+
+/// Validate icon URI for allowed schemes (data:, https:)
+/// Returns error if scheme is not supported or URI is malformed
+pub fn validateIconUri(uri: []const u8) error{
+    InvalidUriScheme,
+    InvalidDataUri,
+    InvalidHttpsUri,
+}!void {
+    if (uri.len == 0) return;
+
+    const colon_idx = std.mem.indexOfScalar(u8, uri, ':') orelse return error.InvalidUriScheme;
+    const scheme = uri[0..colon_idx];
+
+    if (std.mem.eql(u8, scheme, "data")) {
+        return validateDataUri(uri);
+    } else if (std.mem.eql(u8, scheme, "https")) {
+        return validateHttpsUri(uri);
+    } else {
+        return error.InvalidUriScheme;
+    }
+}
+
+/// Validate data: URI format
+fn validateDataUri(uri: []const u8) error{
+    InvalidDataUri,
+}!void {
+    const comma_idx = std.mem.indexOfScalar(u8, uri, ',') orelse return error.InvalidDataUri;
+
+    if (comma_idx < 6) {
+        return error.InvalidDataUri;
+    }
+
+    const mime_type = uri[5..comma_idx];
+
+    if (mime_type.len == 0) {
+        return error.InvalidDataUri;
+    }
+
+    if (std.mem.indexOfScalar(u8, mime_type, ';') != null) {
+        const semicolon_idx = std.mem.indexOfScalar(u8, mime_type, ';') orelse return error.InvalidDataUri;
+        const encoding = mime_type[semicolon_idx + 1 ..];
+
+        if (!std.mem.eql(u8, encoding, "base64")) {
+            return error.InvalidDataUri;
+        }
+    }
+
+    return;
+}
+
+/// Validate https: URI format
+fn validateHttpsUri(uri: []const u8) error{
+    InvalidHttpsUri,
+}!void {
+    const after_scheme = uri[6..];
+
+    if (after_scheme.len < 2) {
+        return error.InvalidHttpsUri;
+    }
+
+    if (!std.mem.eql(u8, after_scheme[0..2], "//")) {
+        return error.InvalidHttpsUri;
+    }
+
+    const slash_idx = std.mem.indexOfScalarPos(u8, after_scheme, 2, '/') orelse after_scheme.len;
+
+    if (slash_idx == 2) {
+        return error.InvalidHttpsUri;
+    }
+
+    const host = after_scheme[2..slash_idx];
+
+    if (host.len == 0) {
+        return error.InvalidHttpsUri;
+    }
+
+    for (host) |c| {
+        if (c == '/' or c == '?' or c == '#' or c < 33 or c > 126) {
+            return error.InvalidHttpsUri;
+        }
+    }
+
+    return;
+}
+
 // ==================== Helper Functions ====================
 
 /// Create a text content item
@@ -305,4 +418,66 @@ test "Tool serialization" {
 test "Content union" {
     const content = textContent("Hello, world!");
     try std.testing.expectEqualStrings("Hello, world!", content.text.text);
+}
+
+test "validateMetadata - valid object" {
+    const allocator = std.testing.allocator;
+    var obj = std.json.ObjectMap.init(allocator);
+    defer obj.deinit();
+    try obj.put("key1", std.json.Value{ .string = "value1" });
+    try obj.put("key2", std.json.Value{ .integer = 42 });
+
+    const metadata = std.json.Value{ .object = obj };
+    try validateMetadata(metadata);
+}
+
+test "validateMetadata - null passes" {
+    try validateMetadata(null);
+}
+
+test "validateMetadata - non-object fails" {
+    const metadata = std.json.Value{ .string = "not an object" };
+    try std.testing.expectError(error.InvalidMetadataType, validateMetadata(metadata));
+}
+
+test "validateMetadata - empty key fails" {
+    const allocator = std.testing.allocator;
+    var obj = std.json.ObjectMap.init(allocator);
+    defer obj.deinit();
+    try obj.put("", std.json.Value{ .string = "value" });
+
+    const metadata = std.json.Value{ .object = obj };
+    try std.testing.expectError(error.InvalidMetadataKey, validateMetadata(metadata));
+}
+
+test "validateIconUri - valid data URI" {
+    try validateIconUri("data:image/png;base64,iVBORw0KGgo=");
+}
+
+test "validateIconUri - valid https URI" {
+    try validateIconUri("https://example.com/icon.png");
+}
+
+test "validateIconUri - https with port" {
+    try validateIconUri("https://example.com:8080/icon.png");
+}
+
+test "validateIconUri - https with path" {
+    try validateIconUri("https://example.com/path/to/icon.png");
+}
+
+test "validateIconUri - invalid scheme" {
+    try std.testing.expectError(error.InvalidUriScheme, validateIconUri("http://example.com/icon.png"));
+    try std.testing.expectError(error.InvalidUriScheme, validateIconUri("file:///icon.png"));
+}
+
+test "validateIconUri - invalid data URI" {
+    try std.testing.expectError(error.InvalidDataUri, validateIconUri("data:"));
+    try std.testing.expectError(error.InvalidDataUri, validateIconUri("data:invalid"));
+}
+
+test "validateIconUri - invalid https URI" {
+    try std.testing.expectError(error.InvalidHttpsUri, validateIconUri("https:"));
+    try std.testing.expectError(error.InvalidHttpsUri, validateIconUri("https:/"));
+    try std.testing.expectError(error.InvalidHttpsUri, validateIconUri("https:example.com"));
 }

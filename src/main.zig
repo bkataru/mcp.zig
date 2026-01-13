@@ -1,6 +1,5 @@
 const std = @import("std");
 const builtin = @import("builtin");
-const Calculator = @import("./tools/calculator.zig").Calculator;
 const mcp = @import("mcp.zig");
 const Network = @import("network.zig").Network;
 const JsonRpc = @import("jsonrpc.zig").JsonRpc;
@@ -11,17 +10,10 @@ const transport = @import("transport.zig");
 const errors = @import("errors.zig");
 const config = @import("config.zig");
 const memory = @import("memory.zig");
-
-/// Helper to stringify JSON to an allocated slice (Zig 0.15 compatible)
-fn jsonStringifyAlloc(allocator: std.mem.Allocator, value: anytype) ![]const u8 {
-    var out: std.io.Writer.Allocating = .init(allocator);
-    errdefer out.deinit();
-    var stringify: std.json.Stringify = .{
-        .writer = &out.writer,
-    };
-    try stringify.write(value);
-    return try out.toOwnedSlice();
-}
+const constants = @import("constants.zig");
+const json_utils = @import("json_utils.zig");
+const ResponseBuilder = json_utils.ResponseBuilder;
+const ErrorCodes = json_utils.ErrorCodes;
 
 /// Main entry point for the MCP server
 pub fn main() !void {
@@ -139,7 +131,7 @@ fn runServer(
         memory_tracker.recordDeallocation();
 
         // Update memory statistics periodically
-        if (memory_tracker.getStats().total_allocations % 100 == 0) {
+        if (memory_tracker.getStats().total_allocations % constants.MEMORY_STATS_INTERVAL == 0) {
             memory_tracker.updateStats(arena_pool);
             if (std.log.defaultLogEnabled(.debug)) {
                 memory_tracker.printStats();
@@ -190,20 +182,21 @@ fn runStdioServer(
 
         // Optional: Add a small delay to prevent busy waiting in case of errors
         if (server_config.log_level == .debug) {
-            std.Thread.sleep(1 * std.time.ns_per_ms); // 1ms delay for debug builds
+            std.Thread.sleep(constants.SLEEP_INTERVAL_NS); // 1ms delay for debug builds
         }
     }
 }
 
 /// Run the server with TCP transport
 fn runTcpServer(
-    network: *Network,
+    _: *Network,
     server: *mcp.MCPServer,
     arena_pool: *memory.ArenaPool,
     memory_tracker: *memory.MemoryTracker,
     server_config: *const config.Config,
 ) !void {
-    _ = network; // Network module not used directly in this implementation    // Create the TCP server socket
+    // Network module not used directly in this implementation
+    // Create the TCP server socket
     const address = std.net.Address.parseIp(server_config.tcp_host, server_config.tcp_port) catch |err| {
         std.log.err("Failed to parse address {s}:{d}: {any}", .{ server_config.tcp_host, server_config.tcp_port, err });
         return err;
@@ -391,12 +384,12 @@ fn handleInitialize(params: ?std.json.Value, id: ?std.json.Value, allocator: std
     try server_info_map.put("version", std.json.Value{ .string = "1.0.0" });
 
     var result_map = std.json.ObjectMap.init(allocator);
-    try result_map.put("protocolVersion", std.json.Value{ .string = "2024-11-05" });
+    try result_map.put("protocolVersion", std.json.Value{ .string = constants.MCP_PROTOCOL_VERSION });
     try result_map.put("capabilities", std.json.Value{ .object = capabilities_map });
     try result_map.put("serverInfo", std.json.Value{ .object = server_info_map });
 
     var response_map = std.json.ObjectMap.init(allocator);
-    try response_map.put("jsonrpc", std.json.Value{ .string = "2.0" });
+    try response_map.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
     try response_map.put("result", std.json.Value{ .object = result_map });
 
     if (id) |id_val| {
@@ -406,7 +399,7 @@ fn handleInitialize(params: ?std.json.Value, id: ?std.json.Value, allocator: std
     }
 
     const response = std.json.Value{ .object = response_map };
-    return try jsonStringifyAlloc(allocator, response);
+    return try json_utils.jsonStringifyAlloc(allocator, response);
 }
 
 /// Handle tools/list method
@@ -446,7 +439,7 @@ fn handleToolsList(server: *mcp.MCPServer, id: ?std.json.Value, allocator: std.m
     try result_map.put("tools", std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, try tools_array.toOwnedSlice(allocator)) });
 
     var response_map = std.json.ObjectMap.init(allocator);
-    try response_map.put("jsonrpc", std.json.Value{ .string = "2.0" });
+    try response_map.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
     try response_map.put("result", std.json.Value{ .object = result_map });
 
     if (id) |id_val| {
@@ -456,7 +449,7 @@ fn handleToolsList(server: *mcp.MCPServer, id: ?std.json.Value, allocator: std.m
     }
 
     const response = std.json.Value{ .object = response_map };
-    return try jsonStringifyAlloc(allocator, response);
+    return try json_utils.jsonStringifyAlloc(allocator, response);
 }
 
 /// Handle tools/call method
@@ -484,12 +477,12 @@ fn handleToolsCall(
             if (obj.get("text")) |t| {
                 break :blk switch (t) {
                     .string => |s| s,
-                    else => try jsonStringifyAlloc(allocator, result_value),
+                    else => try json_utils.jsonStringifyAlloc(allocator, result_value),
                 };
             }
-            break :blk try jsonStringifyAlloc(allocator, result_value);
+            break :blk try json_utils.jsonStringifyAlloc(allocator, result_value);
         },
-        else => try jsonStringifyAlloc(allocator, result_value),
+        else => try json_utils.jsonStringifyAlloc(allocator, result_value),
     };
 
     // Create response
@@ -503,7 +496,7 @@ fn handleToolsCall(
     try result_map.put("content", std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, try content_array.toOwnedSlice(allocator)) });
 
     var response_map = std.json.ObjectMap.init(allocator);
-    try response_map.put("jsonrpc", std.json.Value{ .string = "2.0" });
+    try response_map.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
     try response_map.put("result", std.json.Value{ .object = result_map });
 
     if (id) |id_val| {
@@ -513,7 +506,7 @@ fn handleToolsCall(
     }
 
     const response = std.json.Value{ .object = response_map };
-    return try jsonStringifyAlloc(allocator, response);
+    return try json_utils.jsonStringifyAlloc(allocator, response);
 }
 
 /// Register tools with the server based on configuration

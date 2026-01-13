@@ -10,6 +10,7 @@
 
 const std = @import("std");
 const Allocator = std.mem.Allocator;
+const StringArrayList = std.array_list.AlignedManaged([]const u8, null);
 
 /// Options for delimiter-based streaming
 pub const DelimiterOptions = struct {
@@ -173,4 +174,139 @@ test "readDelimiterFrame parses newline-delimited message" {
     defer std.testing.allocator.free(message);
 
     try std.testing.expectEqualStrings("{\"test\":true}", message);
+}
+
+/// Streaming response builder for multi-part responses
+pub const StreamingResponse = struct {
+    allocator: std.mem.Allocator,
+    chunks: StringArrayList,
+    total_size: usize = 0,
+
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        return @This(){
+            .allocator = allocator,
+            .chunks = StringArrayList.init(allocator),
+            .total_size = 0,
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        for (self.chunks.items) |chunk| {
+            self.allocator.free(chunk);
+        }
+        self.chunks.deinit();
+    }
+
+    /// Add a chunk to the streaming response
+    pub fn addChunk(self: *@This(), chunk: []const u8) !void {
+        const chunk_copy = try self.allocator.dupe(u8, chunk);
+        try self.chunks.append(chunk_copy);
+        self.total_size += chunk.len;
+    }
+
+    /// Get total size of all chunks
+    pub fn getTotalSize(self: *@This()) usize {
+        return self.total_size;
+    }
+
+    /// Get chunk count
+    pub fn getChunkCount(self: *@This()) usize {
+        return self.chunks.items.len;
+    }
+
+    /// Combine all chunks into a single buffer
+    pub fn combine(self: *@This()) ![]const u8 {
+        const combined = try self.allocator.alloc(u8, self.total_size);
+        var offset: usize = 0;
+        for (self.chunks.items) |chunk| {
+            std.mem.copyForwards(u8, combined[offset..], chunk);
+            offset += chunk.len;
+        }
+        return combined;
+    }
+
+    /// Stream chunks to a writer
+    pub fn streamTo(self: *@This(), writer: std.io.AnyWriter) !void {
+        for (self.chunks.items) |chunk| {
+            try writer.writeAll(chunk);
+        }
+    }
+};
+
+/// Batched response writer for sending multiple JSON-RPC responses
+pub const BatchedWriter = struct {
+    allocator: std.mem.Allocator,
+    responses: StringArrayList,
+
+    pub fn init(allocator: std.mem.Allocator) @This() {
+        return @This(){
+            .allocator = allocator,
+            .responses = StringArrayList.init(allocator),
+        };
+    }
+
+    pub fn deinit(self: *@This()) void {
+        for (self.responses.items) |response| {
+            self.allocator.free(response);
+        }
+        self.responses.deinit();
+    }
+
+    /// Add a response to the batch
+    pub fn addResponse(self: *@This(), response_json: []const u8) !void {
+        const response_copy = try self.allocator.dupe(u8, response_json);
+        try self.responses.append(response_copy);
+    }
+
+    /// Get response count
+    pub fn count(self: *@This()) usize {
+        return self.responses.items.len;
+    }
+
+    /// Write all responses as a JSON array
+    pub fn writeBatch(self: *@This(), writer: std.io.AnyWriter) !void {
+        try writer.writeAll("[");
+        for (self.responses.items, 0..) |response, i| {
+            if (i > 0) {
+                try writer.writeAll(",");
+            }
+            try writer.writeAll(response);
+        }
+        try writer.writeAll("]");
+    }
+
+    /// Write all responses individually with Content-Length framing
+    pub fn writeBatchFramed(self: *@This(), writer: std.io.AnyWriter) !void {
+        for (self.responses.items) |response| {
+            try writeContentLengthFrame(writer, response);
+        }
+    }
+};
+
+test "StreamingResponse" {
+    const allocator = std.testing.allocator;
+    var streaming = StreamingResponse.init(allocator);
+    defer streaming.deinit();
+
+    try streaming.addChunk("part1");
+    try streaming.addChunk("part2");
+    try streaming.addChunk("part3");
+
+    try std.testing.expectEqual(@as(usize, 3), streaming.getChunkCount());
+    try std.testing.expectEqual(@as(usize, 15), streaming.getTotalSize());
+
+    const combined = try streaming.combine();
+    defer allocator.free(combined);
+    try std.testing.expectEqualStrings("part1part2part3", combined);
+}
+
+test "BatchedWriter" {
+    const allocator = std.testing.allocator;
+    var batch = BatchedWriter.init(allocator);
+    defer batch.deinit();
+
+    try batch.addResponse("{\"id\":1,\"result\":\"ok\"}");
+    try batch.addResponse("{\"id\":2,\"result\":\"done\"}");
+
+    try std.testing.expectEqual(@as(usize, 2), batch.count());
 }

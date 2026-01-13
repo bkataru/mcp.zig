@@ -101,7 +101,7 @@ pub fn main() !void {
 /// Example handler for configuration resource
 fn configHandler(allocator: std.mem.Allocator, uri: []const u8) !mcp.primitives.ResourceContent {
     _ = allocator; // For demonstration, we don't allocate
-    const config = 
+    const config =
         \\{
         \\  "version": "1.0.0",
         \\  "debug": true,
@@ -120,7 +120,7 @@ fn configHandler(allocator: std.mem.Allocator, uri: []const u8) !mcp.primitives.
 /// Example handler for logs resource
 fn logsHandler(allocator: std.mem.Allocator, uri: []const u8) !mcp.primitives.ResourceContent {
     _ = allocator; // For demonstration, we don't allocate
-    const logs = "[2024-01-13T10:30:00Z] Application started\n[2024-01-13T10:30:15Z] Server listening on port 8080\n[2024-01-13T10:30:20Z] Ready to accept connections\n";
+    const logs = "[2025-01-13T10:30:00Z] Application started\n[2025-01-13T10:30:15Z] Server listening on port 8080\n[2025-01-13T10:30:20Z] Ready to accept connections\n";
 
     return .{
         .uri = uri,
@@ -133,7 +133,7 @@ fn logsHandler(allocator: std.mem.Allocator, uri: []const u8) !mcp.primitives.Re
 /// Example handler for metrics resource
 fn metricsHandler(allocator: std.mem.Allocator, uri: []const u8) !mcp.primitives.ResourceContent {
     _ = allocator; // For demonstration, we don't allocate
-    const metrics = 
+    const metrics =
         \\{
         \\  "cpu_usage": 45.2,
         \\  "memory_used_mb": 256,

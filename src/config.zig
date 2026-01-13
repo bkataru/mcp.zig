@@ -1,22 +1,23 @@
 const std = @import("std");
 const transport = @import("transport.zig");
+const constants = @import("constants.zig");
 
 /// Server configuration structure
 pub const Config = struct {
     // Transport settings
     transport_mode: transport.TransportMode = .stdio,
-    tcp_host: []const u8 = "127.0.0.1",
-    tcp_port: u16 = 8080,
+    tcp_host: []const u8 = constants.DEFAULT_HOST,
+    tcp_port: u16 = constants.DEFAULT_PORT,
 
     // Security settings
     cli_allowed_commands: []const []const u8 = &.{ "echo", "ls" },
-    max_command_timeout_ms: u32 = 5000,
+    max_command_timeout_ms: u32 = constants.DEFAULT_COMMAND_TIMEOUT_MS,
     enable_calculator: bool = true,
     enable_cli: bool = true,
 
     // Performance settings
-    max_request_size: usize = 1024 * 1024, // 1MB
-    connection_timeout_ms: u32 = 30000,
+    max_request_size: usize = constants.DEFAULT_MAX_REQUEST_SIZE,
+    connection_timeout_ms: u32 = constants.DEFAULT_CONNECTION_TIMEOUT_MS,
 
     // Logging settings
     log_level: std.log.Level = .debug,

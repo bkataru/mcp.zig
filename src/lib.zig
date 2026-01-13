@@ -29,6 +29,7 @@
 //! ```
 
 const std = @import("std");
+const constants = @import("constants.zig");
 
 // ==================== Core Modules ====================
 
@@ -47,7 +48,7 @@ pub const CallToolResult = types.CallToolResult;
 pub const ServerCapabilities = types.ServerCapabilities;
 pub const ClientCapabilities = types.ClientCapabilities;
 pub const Implementation = types.Implementation;
-pub const PROTOCOL_VERSION = types.PROTOCOL_VERSION;
+pub const PROTOCOL_VERSION = constants.MCP_PROTOCOL_VERSION;
 
 // JSON-RPC handling
 pub const jsonrpc = @import("jsonrpc.zig");

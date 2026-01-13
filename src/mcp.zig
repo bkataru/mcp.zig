@@ -5,9 +5,10 @@ const Tool = tool.Tool;
 const Resource = @import("primitives/resource.zig");
 const jsonrpc = @import("jsonrpc.zig");
 const network = @import("network.zig");
+const constants = @import("constants.zig");
 
 /// MCP Protocol version - aligned with latest specification
-pub const PROTOCOL_VERSION = "2024-11-05";
+pub const PROTOCOL_VERSION = constants.MCP_PROTOCOL_VERSION;
 
 /// MCP Server state
 pub const ServerState = enum {
@@ -262,7 +263,7 @@ pub const MCPServer = struct {
     fn createSuccessResponse(self: *@This(), arena: std.mem.Allocator, id: ?std.json.Value, result: std.json.Value) !std.json.Value {
         _ = self;
         var response = std.json.Value{ .object = std.json.ObjectMap.init(arena) };
-        try response.object.put("jsonrpc", std.json.Value{ .string = "2.0" });
+        try response.object.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
         try response.object.put("result", result);
 
         if (id) |id_val| {
@@ -280,7 +281,7 @@ pub const MCPServer = struct {
         try error_obj.object.put("message", std.json.Value{ .string = try arena.dupe(u8, message) });
 
         var response = std.json.Value{ .object = std.json.ObjectMap.init(arena) };
-        try response.object.put("jsonrpc", std.json.Value{ .string = "2.0" });
+        try response.object.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
         try response.object.put("error", error_obj);
 
         if (id) |id_val| {
@@ -332,6 +333,8 @@ pub const Session = struct {
     tools: std.StringHashMap(*Tool),
     resources: std.StringHashMap(*Resource),
     capabilities: std.StringHashMap([]const u8),
+    state: ServerState = .created,
+    session_id: u32,
 
     /// Initialize a new session
     pub fn init(allocator: std.mem.Allocator, connection: *network.Connection) !@This() {
@@ -341,6 +344,7 @@ pub const Session = struct {
             .tools = std.StringHashMap(*Tool).init(allocator),
             .resources = std.StringHashMap(*Resource).init(allocator),
             .capabilities = std.StringHashMap([]const u8).init(allocator),
+            .session_id = std.time.timestamp(),
         };
     }
 
@@ -348,16 +352,68 @@ pub const Session = struct {
     pub fn handleMessage(self: *@This(), message: jsonrpc.Message) !void {
         switch (message) {
             .request => |req| {
-                if (std.mem.eql(u8, req.method, "registerTool")) {
+                if (std.mem.eql(u8, req.method, "initialize")) {
+                    try self.handleInitialize(req);
+                } else if (std.mem.eql(u8, req.method, "registerTool")) {
                     try self.registerTool(req.params);
                 } else if (std.mem.eql(u8, req.method, "discoverCapabilities")) {
                     try self.discoverCapabilities(req.id);
+                } else if (std.mem.eql(u8, req.method, "shutdown")) {
+                    try self.handleShutdown(req.id);
                 } else {
                     return error.UnsupportedMethod;
                 }
             },
+            .notification => |notif| {
+                if (std.mem.eql(u8, notif.method, "initialized")) {
+                    self.state = .ready;
+                }
+            },
             else => return error.InvalidMessageType,
         }
+    }
+
+    /// Handle initialize request
+    fn handleInitialize(self: *@This(), req: jsonrpc.Request) !void {
+        self.state = .initializing;
+
+        var response = std.json.Value{ .object = std.json.ObjectMap.init(self.allocator) };
+        try response.object.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
+        try response.object.put("id", req.id orelse std.json.Value{ .integer = 0 });
+
+        var result = std.json.ObjectMap.init(self.allocator);
+        try result.put("protocolVersion", std.json.Value{ .string = PROTOCOL_VERSION });
+
+        var server_info = std.json.ObjectMap.init(self.allocator);
+        try server_info.put("name", std.json.Value{ .string = "mcp-zig-session" });
+        try server_info.put("version", std.json.Value{ .string = "1.0.0" });
+        try result.put("serverInfo", std.json.Value{ .object = server_info });
+
+        try response.object.put("result", std.json.Value{ .object = result });
+
+        var buffer = std.ArrayList(u8).init(self.allocator);
+        defer buffer.deinit();
+        try std.json.stringify(response, .{}, buffer.writer());
+        try self.connection.writer.writeAll(buffer.items);
+    }
+
+    /// Handle shutdown request
+    fn handleShutdown(self: *@This(), id: ?jsonrpc.Id) !void {
+        self.state = .shutdown;
+
+        var response = std.json.Value{ .object = std.json.ObjectMap.init(self.allocator) };
+        try response.object.put("jsonrpc", std.json.Value{ .string = constants.JSON_RPC_VERSION });
+        if (id) |id_val| {
+            try response.object.put("id", id_val);
+        } else {
+            try response.object.put("id", std.json.Value{ .integer = 0 });
+        }
+        try response.object.put("result", std.json.Value{ .null = {} });
+
+        var buffer = std.ArrayList(u8).init(self.allocator);
+        defer buffer.deinit();
+        try std.json.stringify(response, .{}, buffer.writer());
+        try self.connection.writer.writeAll(buffer.items);
     }
 
     /// Register a new tool with the session
@@ -409,6 +465,21 @@ pub const Session = struct {
             .resources = self.resources.count() > 0,
             .prompts = false, // Can be extended when prompts are added to session
         };
+    }
+
+    /// Get session information
+    pub fn getSessionInfo(self: *@This()) struct { id: u32, state: ServerState, tool_count: usize, resource_count: usize } {
+        return .{
+            .id = self.session_id,
+            .state = self.state,
+            .tool_count = self.tools.count(),
+            .resource_count = self.resources.count(),
+        };
+    }
+
+    /// Check if session is ready to process requests
+    pub fn isReady(self: *@This()) bool {
+        return self.state == .ready;
     }
 
     /// Clean up session resources

@@ -6,7 +6,7 @@
     .version = "0.1.0",
 
     // Minimum Zig version required
-    .minimum_zig_version = "0.15.0",
+    .minimum_zig_version = "0.15.2",
 
     // Dependencies (none currently)
     .dependencies = .{},
