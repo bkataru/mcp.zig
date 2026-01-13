@@ -1,0 +1,45 @@
+# Zig build artifacts
+.zig-cache/
+zig-out/
+zig-cache/
+
+# IDE/Editor
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Build outputs
+*.exe
+*.obj
+*.pdb
+*.o
+*.a
+*.lib
+*.dll
+*.so
+*.dylib
+
+# Archives
+*.zip
+*.tar.gz
+*.tgz
+
+# Development/research files (not part of the library)
+*.llms.txt
+repomix-output.xml
+project_overview.json
+research.txt
+architecture.txt
+
+# Reference implementations (if cloned locally)
+references/
+
+# Python cache (for test scripts)
+__pycache__/
+*.pyc
