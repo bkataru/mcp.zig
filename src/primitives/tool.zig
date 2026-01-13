@@ -140,19 +140,18 @@ test "Tool registration and invocation" {
             allocator_: std.mem.Allocator,
             params: std.StringHashMap([]const u8),
         ) ![]const u8 {
-            _ = allocator_;
             const value = params.get("test_param") orelse return error.MissingParameter;
-            return value;
+            return allocator_.dupe(u8, value);
         }
     }.handler;
 
     var tool = try Tool.init(allocator, "test_tool", "Test tool", testHandler);
-    defer tool.deinit();
+    // Note: registry takes ownership of tool, so don't defer tool.deinit() here
     try tool.addParameter("test_param", "string");
 
     // Create registry and register tool
     var registry = ToolRegistry.init(allocator);
-    defer registry.deinit();
+    defer registry.deinit(); // This will deinit the tool
     try registry.register(tool);
 
     // Test invocation

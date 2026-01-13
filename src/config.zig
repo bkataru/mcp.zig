@@ -117,7 +117,7 @@ pub const Config = struct {
         std.log.info("  CLI enabled: {any}", .{self.enable_cli});
 
         if (self.enable_cli) {
-            std.log.info("  CLI allowed commands: {s}", .{self.cli_allowed_commands});
+            std.log.info("  CLI allowed commands: {d} commands", .{self.cli_allowed_commands.len});
         }
 
         std.log.info("  Log level: {s}", .{@tagName(self.log_level)});

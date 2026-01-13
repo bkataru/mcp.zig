@@ -122,6 +122,6 @@ pub const Calculator = struct {
 
 // Export the legacy init function for compatibility
 pub fn init(allocator: std.mem.Allocator) !*Tool {
-    var calc = try Calculator.init(allocator);
+    const calc = try Calculator.init(allocator);
     return calc.tool_instance;
 }

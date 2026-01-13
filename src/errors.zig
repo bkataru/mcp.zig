@@ -104,6 +104,17 @@ pub const JsonRpcError = struct {
     }
 };
 
+/// Helper to stringify JSON to an allocated slice (Zig 0.15 compatible)
+fn jsonStringifyAlloc(allocator: std.mem.Allocator, value: anytype) ![]const u8 {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    var stringify: std.json.Stringify = .{
+        .writer = &out.writer,
+    };
+    try stringify.write(value);
+    return try out.toOwnedSlice();
+}
+
 /// Create standardized error response
 pub fn createErrorResponse(
     id: ?std.json.Value,
@@ -125,7 +136,7 @@ pub fn createErrorResponse(
         },
     };
 
-    return try std.json.stringifyAlloc(allocator, response, .{});
+    return try jsonStringifyAlloc(allocator, response);
 }
 
 /// Create error response with custom message
@@ -144,7 +155,7 @@ pub fn createErrorResponseWithMessage(
         },
     };
 
-    return try std.json.stringifyAlloc(allocator, response, .{});
+    return try jsonStringifyAlloc(allocator, response);
 }
 
 /// Validate JSON-RPC request structure

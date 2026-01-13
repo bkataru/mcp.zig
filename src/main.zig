@@ -12,6 +12,17 @@ const errors = @import("errors.zig");
 const config = @import("config.zig");
 const memory = @import("memory.zig");
 
+/// Helper to stringify JSON to an allocated slice (Zig 0.15 compatible)
+fn jsonStringifyAlloc(allocator: std.mem.Allocator, value: anytype) ![]const u8 {
+    var out: std.io.Writer.Allocating = .init(allocator);
+    errdefer out.deinit();
+    var stringify: std.json.Stringify = .{
+        .writer = &out.writer,
+    };
+    try stringify.write(value);
+    return try out.toOwnedSlice();
+}
+
 /// Main entry point for the MCP server
 pub fn main() !void {
     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
@@ -163,15 +174,6 @@ fn runStdioServer(
                 std.log.info("Input stream closed or pipe disconnected", .{});
                 break;
             },
-            error.Unexpected => {
-                // Handle invalid pipe/stdin (e.g., when echo terminates)
-                std.log.info("Input stream closed (Windows pipe issue)", .{});
-                break;
-            },
-            error.BrokenPipe => {
-                std.log.info("Broken pipe detected", .{});
-                break;
-            },
             else => {
                 std.log.err("Failed to read request: {any}", .{err});
                 std.log.info("Stdio transport error, exiting", .{});
@@ -188,7 +190,7 @@ fn runStdioServer(
 
         // Optional: Add a small delay to prevent busy waiting in case of errors
         if (server_config.log_level == .debug) {
-            std.time.sleep(1 * std.time.ns_per_ms); // 1ms delay for debug builds
+            std.Thread.sleep(1 * std.time.ns_per_ms); // 1ms delay for debug builds
         }
     }
 }
@@ -203,12 +205,12 @@ fn runTcpServer(
 ) !void {
     _ = network; // Network module not used directly in this implementation    // Create the TCP server socket
     const address = std.net.Address.parseIp(server_config.tcp_host, server_config.tcp_port) catch |err| {
-        std.log.err("Failed to parse address {s}:{d}: {}", .{ server_config.tcp_host, server_config.tcp_port, err });
+        std.log.err("Failed to parse address {s}:{d}: {any}", .{ server_config.tcp_host, server_config.tcp_port, err });
         return err;
     };
 
     var server_sock = address.listen(.{}) catch |err| {
-        std.log.err("Failed to listen on {s}:{d}: {}", .{ server_config.tcp_host, server_config.tcp_port, err });
+        std.log.err("Failed to listen on {s}:{d}: {any}", .{ server_config.tcp_host, server_config.tcp_port, err });
         return err;
     };
     defer server_sock.deinit();
@@ -218,15 +220,15 @@ fn runTcpServer(
     // Accept and handle connections
     while (true) {
         const connection = server_sock.accept() catch |err| {
-            std.log.err("Failed to accept connection: {}", .{err});
+            std.log.err("Failed to accept connection: {any}", .{err});
             continue;
         };
 
-        std.log.info("New client connected from {}", .{connection.address});
+        std.log.info("New client connected from {any}", .{connection.address});
 
         // Handle the connection in a separate thread or inline
         handleTcpConnection(connection.stream, server, arena_pool, memory_tracker) catch |err| {
-            std.log.err("Failed to handle connection: {}", .{err});
+            std.log.err("Failed to handle connection: {any}", .{err});
         };
 
         connection.stream.close();
@@ -240,12 +242,9 @@ fn handleTcpConnection(
     arena_pool: *memory.ArenaPool,
     memory_tracker: *memory.MemoryTracker,
 ) !void {
-    // Create transport for this connection
-    var tcp_transport = transport.Transport{
-        .reader = stream.reader().any(),
-        .writer = stream.writer().any(),
-        .mutex = std.Thread.Mutex{},
-    };
+    // Create transport for this connection using TcpTransport
+    var tcp_transport = transport.TcpTransport.init(stream);
+    defer tcp_transport.deinit();
 
     // Handle messages from this client
     while (true) {
@@ -256,7 +255,7 @@ fn handleTcpConnection(
         defer scoped_arena.deinit();
 
         memory_tracker.recordAllocation();
-        const request_data = tcp_transport.readMessage(scoped_arena.allocator()) catch |err| switch (err) {
+        const request_data = tcp_transport.transport.readMessage(scoped_arena.allocator()) catch |err| switch (err) {
             error.EndOfStream => {
                 std.log.info("Client disconnected", .{});
                 break;
@@ -269,7 +268,7 @@ fn handleTcpConnection(
 
         // Process request and send response
         processRequest(
-            &tcp_transport,
+            &tcp_transport.transport,
             request_data,
             server,
             scoped_arena.allocator(),
@@ -373,13 +372,13 @@ fn handleInitialize(params: ?std.json.Value, id: ?std.json.Value, allocator: std
     }
 
     const response = std.json.Value{ .object = response_map };
-    return try std.json.stringifyAlloc(allocator, response, .{});
+    return try jsonStringifyAlloc(allocator, response);
 }
 
 /// Handle tools/list method
 fn handleToolsList(server: *mcp.MCPServer, id: ?std.json.Value, allocator: std.mem.Allocator) ![]const u8 {
-    var tools_array = std.ArrayList(std.json.Value).init(allocator);
-    defer tools_array.deinit();
+    var tools_array = std.ArrayListUnmanaged(std.json.Value){};
+    defer tools_array.deinit(allocator);
 
     var iterator = server.tools.iterator();
     while (iterator.next()) |entry| {
@@ -390,25 +389,27 @@ fn handleToolsList(server: *mcp.MCPServer, id: ?std.json.Value, allocator: std.m
         try tool_map.put("name", std.json.Value{ .string = tool_instance.name });
         try tool_map.put("description", std.json.Value{ .string = tool_instance.description });
 
-        var schema_map = std.json.ObjectMap.init(allocator);
-        try schema_map.put("type", std.json.Value{ .string = "object" });
-
-        var properties_map = std.json.ObjectMap.init(allocator);
-        var param_iter = tool_instance.parameters.iterator();
-        while (param_iter.next()) |param_entry| {
-            var param_map = std.json.ObjectMap.init(allocator);
-            try param_map.put("type", std.json.Value{ .string = param_entry.value_ptr.* });
-            try properties_map.put(param_entry.key_ptr.*, std.json.Value{ .object = param_map });
+        // Parse input_schema if available, otherwise use empty object
+        if (tool_instance.input_schema) |schema| {
+            const parsed = std.json.parseFromSlice(std.json.Value, allocator, schema, .{}) catch {
+                var empty_schema = std.json.ObjectMap.init(allocator);
+                try empty_schema.put("type", std.json.Value{ .string = "object" });
+                try tool_map.put("inputSchema", std.json.Value{ .object = empty_schema });
+                try tools_array.append(allocator, std.json.Value{ .object = tool_map });
+                continue;
+            };
+            try tool_map.put("inputSchema", parsed.value);
+        } else {
+            var empty_schema = std.json.ObjectMap.init(allocator);
+            try empty_schema.put("type", std.json.Value{ .string = "object" });
+            try tool_map.put("inputSchema", std.json.Value{ .object = empty_schema });
         }
 
-        try schema_map.put("properties", std.json.Value{ .object = properties_map });
-        try tool_map.put("inputSchema", std.json.Value{ .object = schema_map });
-
-        try tools_array.append(std.json.Value{ .object = tool_map });
+        try tools_array.append(allocator, std.json.Value{ .object = tool_map });
     }
 
     var result_map = std.json.ObjectMap.init(allocator);
-    try result_map.put("tools", std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, try tools_array.toOwnedSlice()) });
+    try result_map.put("tools", std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, try tools_array.toOwnedSlice(allocator)) });
 
     var response_map = std.json.ObjectMap.init(allocator);
     try response_map.put("jsonrpc", std.json.Value{ .string = "2.0" });
@@ -421,7 +422,7 @@ fn handleToolsList(server: *mcp.MCPServer, id: ?std.json.Value, allocator: std.m
     }
 
     const response = std.json.Value{ .object = response_map };
-    return try std.json.stringifyAlloc(allocator, response, .{});
+    return try jsonStringifyAlloc(allocator, response);
 }
 
 /// Handle tools/call method
@@ -433,44 +434,39 @@ fn handleToolsCall(
 ) ![]const u8 {
     const params_obj = params orelse return error.InvalidParams;
     const tool_name = params_obj.object.get("name") orelse return error.InvalidParams;
-    const arguments = params_obj.object.get("arguments");
+    const arguments = params_obj.object.get("arguments") orelse std.json.Value{ .object = std.json.ObjectMap.init(allocator) };
 
     const tool_instance = server.tools.get(tool_name.string) orelse return error.UnknownTool;
 
-    // Convert arguments to StringHashMap
-    var param_map = std.StringHashMap([]const u8).init(allocator);
-    defer param_map.deinit();
-
-    if (arguments) |args| {
-        if (args.object.count() > 0) {
-            var arg_iter = args.object.iterator();
-            while (arg_iter.next()) |entry| {
-                const value_str = switch (entry.value_ptr.*) {
-                    .string => |s| s,
-                    .integer => |i| try std.fmt.allocPrint(allocator, "{d}", .{i}),
-                    .float => |f| try std.fmt.allocPrint(allocator, "{d}", .{f}),
-                    .bool => |b| if (b) "true" else "false",
-                    else => "unknown",
-                };
-                try param_map.put(entry.key_ptr.*, value_str);
-            }
-        }
-    }
-    // Execute tool
-    const tool_result = tool_instance.handler(allocator, param_map) catch {
+    // Call tool handler directly with JSON Value (new MCPTool interface)
+    const result_value = tool_instance.handler(allocator, arguments) catch {
         return error.ToolExecutionFailed;
     };
-    defer allocator.free(tool_result);
+
+    // Extract result text from the returned JSON value
+    const result_text = switch (result_value) {
+        .string => |s| s,
+        .object => |obj| blk: {
+            if (obj.get("text")) |t| {
+                break :blk switch (t) {
+                    .string => |s| s,
+                    else => try jsonStringifyAlloc(allocator, result_value),
+                };
+            }
+            break :blk try jsonStringifyAlloc(allocator, result_value);
+        },
+        else => try jsonStringifyAlloc(allocator, result_value),
+    };
 
     // Create response
-    var content_array = std.json.Array.init(allocator);
+    var content_array = std.ArrayListUnmanaged(std.json.Value){};
     var content_map = std.json.ObjectMap.init(allocator);
     try content_map.put("type", std.json.Value{ .string = "text" });
-    try content_map.put("text", std.json.Value{ .string = tool_result });
-    try content_array.append(std.json.Value{ .object = content_map });
+    try content_map.put("text", std.json.Value{ .string = result_text });
+    try content_array.append(allocator, std.json.Value{ .object = content_map });
 
     var result_map = std.json.ObjectMap.init(allocator);
-    try result_map.put("content", std.json.Value{ .array = content_array });
+    try result_map.put("content", std.json.Value{ .array = std.json.Array.fromOwnedSlice(allocator, try content_array.toOwnedSlice(allocator)) });
 
     var response_map = std.json.ObjectMap.init(allocator);
     try response_map.put("jsonrpc", std.json.Value{ .string = "2.0" });
@@ -483,22 +479,114 @@ fn handleToolsCall(
     }
 
     const response = std.json.Value{ .object = response_map };
-    return try std.json.stringifyAlloc(allocator, response, .{});
+    return try jsonStringifyAlloc(allocator, response);
 }
 
 /// Register tools with the server based on configuration
 fn registerTools(server: *mcp.MCPServer, allocator: std.mem.Allocator, server_config: *const config.Config) !void {
+    _ = allocator;
     if (server_config.enable_calculator) {
-        // Register calculator tool
-        const calc_tool = try calculator.init(allocator);
-        try server.tools.put(calc_tool.name, calc_tool);
+        // Register calculator tool using MCPTool with new handler signature
+        try server.registerTool(.{
+            .name = "calculator",
+            .description = "Basic arithmetic operations (add, subtract, multiply, divide)",
+            .handler = calculator.calculatorHandler,
+            .input_schema = calculator.calculator_schema,
+        });
         std.log.info("Registered calculator tool", .{});
     }
 
     if (server_config.enable_cli) {
-        // Register CLI tool
-        const cli_tool = try cli.init(allocator);
-        try server.tools.put(cli_tool.name, cli_tool);
+        // Register CLI tool - use a wrapper that adapts the handler signature
+        try server.registerTool(.{
+            .name = "cli",
+            .description = "Execute system commands (restricted to echo and ls)",
+            .handler = cliToolHandler,
+            .input_schema =
+            \\{
+            \\  "type": "object",
+            \\  "properties": {
+            \\    "command": {"type": "string", "description": "Command to execute (echo or ls)"},
+            \\    "args": {"type": "string", "description": "Optional arguments for the command"}
+            \\  },
+            \\  "required": ["command"]
+            \\}
+            ,
+        });
         std.log.info("Registered CLI tool", .{});
     }
+}
+
+/// CLI tool handler adapted to MCPTool signature
+fn cliToolHandler(allocator: std.mem.Allocator, params: std.json.Value) anyerror!std.json.Value {
+    if (params != .object) {
+        return error.InvalidParams;
+    }
+
+    const command_val = params.object.get("command") orelse return error.MissingParameter;
+    if (command_val != .string) return error.InvalidParams;
+    const command = command_val.string;
+
+    const args = if (params.object.get("args")) |args_val|
+        if (args_val == .string) args_val.string else null
+    else
+        null;
+
+    // Security check - only allow specific commands
+    const allowed_commands = [_][]const u8{ "echo", "ls" };
+    var command_allowed = false;
+    for (allowed_commands) |allowed_cmd| {
+        if (std.mem.eql(u8, command, allowed_cmd)) {
+            command_allowed = true;
+            break;
+        }
+    }
+
+    if (!command_allowed) {
+        return std.json.Value{ .string = "Error: Command not allowed. Only 'echo' and 'ls' are permitted." };
+    }
+
+    // Build command arguments
+    var cmd_args = std.ArrayListUnmanaged([]const u8){};
+    defer cmd_args.deinit(allocator);
+
+    // On Windows, use cmd.exe for built-in commands
+    if (builtin.os.tag == .windows) {
+        try cmd_args.append(allocator, "cmd.exe");
+        try cmd_args.append(allocator, "/c");
+        if (std.mem.eql(u8, command, "ls")) {
+            try cmd_args.append(allocator, "dir");
+        } else {
+            try cmd_args.append(allocator, command);
+        }
+        if (args) |args_str| {
+            try cmd_args.append(allocator, args_str);
+        }
+    } else {
+        try cmd_args.append(allocator, command);
+        if (args) |args_str| {
+            var arg_iterator = std.mem.splitScalar(u8, args_str, ' ');
+            while (arg_iterator.next()) |arg| {
+                if (arg.len > 0) {
+                    try cmd_args.append(allocator, arg);
+                }
+            }
+        }
+    }
+
+    // Execute command
+    const exec_result = std.process.Child.run(.{
+        .allocator = allocator,
+        .argv = cmd_args.items,
+        .max_output_bytes = 1024 * 1024,
+    }) catch |err| {
+        const error_msg = std.fmt.allocPrint(allocator, "Command execution failed: {any}", .{err}) catch "Command failed";
+        return std.json.Value{ .string = error_msg };
+    };
+    defer allocator.free(exec_result.stdout);
+    defer allocator.free(exec_result.stderr);
+
+    // Return result
+    const result = try allocator.dupe(u8, exec_result.stdout);
+    return std.json.Value{ .string = result };
 }

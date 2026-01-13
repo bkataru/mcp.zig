@@ -1,0 +1,24 @@
+.{
+    // Package name - used when other projects depend on this one
+    .name = .mcp,
+
+    // Semantic version for package deduplication
+    .version = "0.1.0",
+
+    // Minimum Zig version required
+    .minimum_zig_version = "0.15.0",
+
+    // Dependencies (none currently)
+    .dependencies = .{},
+
+    // Files included in the package hash
+    .paths = .{
+        "build.zig",
+        "build.zig.zon",
+        "src",
+        "README.md",
+        "LICENSE",
+    },
+
+    .fingerprint = 0xa19bc839eb8ba597,
+}

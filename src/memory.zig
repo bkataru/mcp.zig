@@ -28,26 +28,27 @@ pub const RequestArena = struct {
 
 /// Pool of arena allocators for handling concurrent requests
 pub const ArenaPool = struct {
-    arenas: std.ArrayList(RequestArena),
-    available: std.ArrayList(usize),
+    arenas: std.ArrayListUnmanaged(RequestArena),
+    available: std.ArrayListUnmanaged(usize),
     mutex: std.Thread.Mutex,
     parent_allocator: std.mem.Allocator,
 
     pub fn init(parent_allocator: std.mem.Allocator, initial_size: usize) !ArenaPool {
-        var pool = ArenaPool{
-            .arenas = std.ArrayList(RequestArena).init(parent_allocator),
-            .available = std.ArrayList(usize).init(parent_allocator),
-            .mutex = .{},
-            .parent_allocator = parent_allocator,
-        };
+        var arenas = std.ArrayListUnmanaged(RequestArena){};
+        var available = std.ArrayListUnmanaged(usize){};
 
         // Pre-allocate initial arenas
         for (0..initial_size) |i| {
-            try pool.arenas.append(RequestArena.init(parent_allocator));
-            try pool.available.append(i);
+            try arenas.append(parent_allocator, RequestArena.init(parent_allocator));
+            try available.append(parent_allocator, i);
         }
 
-        return pool;
+        return ArenaPool{
+            .arenas = arenas,
+            .available = available,
+            .mutex = .{},
+            .parent_allocator = parent_allocator,
+        };
     }
 
     pub fn deinit(self: *ArenaPool) void {
@@ -57,8 +58,8 @@ pub const ArenaPool = struct {
         for (self.arenas.items) |*arena| {
             arena.deinit();
         }
-        self.arenas.deinit();
-        self.available.deinit();
+        self.arenas.deinit(self.parent_allocator);
+        self.available.deinit(self.parent_allocator);
     }
 
     /// Acquire an arena from the pool
@@ -73,7 +74,7 @@ pub const ArenaPool = struct {
 
         // No available arenas, create a new one
         const index = self.arenas.items.len;
-        try self.arenas.append(RequestArena.init(self.parent_allocator));
+        try self.arenas.append(self.parent_allocator, RequestArena.init(self.parent_allocator));
         return &self.arenas.items[index];
     }
 
@@ -88,7 +89,7 @@ pub const ArenaPool = struct {
         // Find the index of this arena
         for (self.arenas.items, 0..) |*pool_arena, i| {
             if (pool_arena == arena) {
-                try self.available.append(i);
+                try self.available.append(self.parent_allocator, i);
                 return;
             }
         }
