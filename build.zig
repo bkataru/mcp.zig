@@ -68,6 +68,25 @@ pub fn build(b: *std.Build) void {
     const test_client_step = b.step("test-client", "Run the integration test client");
     test_client_step.dependOn(&run_test_client.step);
 
+    // Example: Resource Subscriptions
+    const example_resource_subscriptions_mod = b.createModule(.{
+        .root_source_file = b.path("examples/resource_subscriptions.zig"),
+        .target = target,
+        .optimize = optimize,
+    });
+    example_resource_subscriptions_mod.addImport("mcp", lib_mod);
+
+    const example_resource_subscriptions_exe = b.addExecutable(.{
+        .name = "resource_subscriptions_example",
+        .root_module = example_resource_subscriptions_mod,
+    });
+    b.installArtifact(example_resource_subscriptions_exe);
+
+    const run_example_subscriptions = b.addRunArtifact(example_resource_subscriptions_exe);
+    run_example_subscriptions.step.dependOn(b.getInstallStep());
+    const example_subscriptions_step = b.step("example-subscriptions", "Run resource subscriptions example");
+    example_subscriptions_step.dependOn(&run_example_subscriptions.step);
+
     // Unit tests for the library
     const lib_unit_tests = b.addTest(.{
         .root_module = lib_mod,
