@@ -39,7 +39,3 @@ architecture.txt
 
 # Reference implementations (if cloned locally)
 references/
-
-# Python cache (for test scripts)
-__pycache__/
-*.pyc
