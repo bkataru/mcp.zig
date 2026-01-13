@@ -3,6 +3,9 @@ const std = @import("std");
 /// Handler function type for resources
 pub const ResourceHandlerFn = *const fn (allocator: std.mem.Allocator, uri: []const u8) anyerror!ResourceContent;
 
+/// Callback function type for resource update notifications
+pub const ResourceUpdateNotificationFn = *const fn (allocator: std.mem.Allocator, uri: []const u8) anyerror!void;
+
 /// Represents a resource that can be accessed by tools
 pub const Resource = struct {
     uri: []const u8,
@@ -20,20 +23,30 @@ pub const ResourceContent = struct {
     blob: ?[]const u8 = null,
 };
 
+/// Subscription tracking for a resource
+const Subscription = struct {
+    uri: []const u8,
+    callback: ResourceUpdateNotificationFn,
+};
+
 /// Registry for managing resources
 pub const ResourceRegistry = struct {
     allocator: std.mem.Allocator,
     resources: std.StringHashMapUnmanaged(Resource),
+    subscriptions: std.ArrayListUnmanaged(Subscription),
+    supports_subscriptions: bool = false,
 
     pub fn init(allocator: std.mem.Allocator) @This() {
         return .{
             .allocator = allocator,
             .resources = .{},
+            .subscriptions = .{},
         };
     }
 
     pub fn deinit(self: *@This()) void {
         self.resources.deinit(self.allocator);
+        self.subscriptions.deinit(self.allocator);
     }
 
     /// Register a new resource
@@ -69,6 +82,65 @@ pub const ResourceRegistry = struct {
     pub fn count(self: *@This()) usize {
         return self.resources.count();
     }
+
+    /// Subscribe to resource updates
+    /// Returns error if resource doesn't exist or subscriptions not supported
+    pub fn subscribe(self: *@This(), uri: []const u8, callback: ResourceUpdateNotificationFn) !void {
+        if (!self.supports_subscriptions) {
+            return error.SubscriptionsNotSupported;
+        }
+        if (self.resources.get(uri) == null) {
+            return error.ResourceNotFound;
+        }
+
+        // Check if already subscribed
+        for (self.subscriptions.items) |sub| {
+            if (std.mem.eql(u8, sub.uri, uri)) {
+                return error.AlreadySubscribed;
+            }
+        }
+
+        try self.subscriptions.append(self.allocator, .{
+            .uri = uri,
+            .callback = callback,
+        });
+    }
+
+    /// Unsubscribe from resource updates
+    pub fn unsubscribe(self: *@This(), uri: []const u8) !void {
+        for (self.subscriptions.items, 0..) |sub, i| {
+            if (std.mem.eql(u8, sub.uri, uri)) {
+                _ = self.subscriptions.orderedRemove(i);
+                return;
+            }
+        }
+        return error.NotSubscribed;
+    }
+
+    /// Get subscription count for a resource
+    pub fn getSubscriptionCount(self: *@This(), uri: []const u8) usize {
+        var subscription_count: usize = 0;
+        for (self.subscriptions.items) |sub| {
+            if (std.mem.eql(u8, sub.uri, uri)) {
+                subscription_count += 1;
+            }
+        }
+        return subscription_count;
+    }
+
+    /// Notify all subscribers of a resource update
+    pub fn notifyUpdate(self: *@This(), uri: []const u8) !void {
+        for (self.subscriptions.items) |sub| {
+            if (std.mem.eql(u8, sub.uri, uri)) {
+                try sub.callback(self.allocator, uri);
+            }
+        }
+    }
+
+    /// Count total active subscriptions
+    pub fn countSubscriptions(self: *@This()) usize {
+        return self.subscriptions.items.len;
+    }
 };
 
 // ==================== Tests ====================
@@ -90,4 +162,91 @@ test "ResourceRegistry basic operations" {
     const resource = registry.get("file:///test.txt");
     try std.testing.expect(resource != null);
     try std.testing.expectEqualStrings("Test File", resource.?.name);
+}
+
+test "ResourceRegistry subscription tracking" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    registry.supports_subscriptions = true;
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+    });
+
+    const callback = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+    }.notify;
+
+    // Subscribe to resource
+    try registry.subscribe("file:///test.txt", callback);
+    try std.testing.expectEqual(@as(usize, 1), registry.countSubscriptions());
+
+    // Duplicate subscription should fail
+    try std.testing.expectError(error.AlreadySubscribed, registry.subscribe("file:///test.txt", callback));
+
+    // Unsubscribe
+    try registry.unsubscribe("file:///test.txt");
+    try std.testing.expectEqual(@as(usize, 0), registry.countSubscriptions());
+
+    // Unsubscribe again should fail
+    try std.testing.expectError(error.NotSubscribed, registry.unsubscribe("file:///test.txt"));
+}
+
+test "ResourceRegistry subscription to non-existent resource" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    registry.supports_subscriptions = true;
+
+    const callback = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+    }.notify;
+
+    try std.testing.expectError(error.ResourceNotFound, registry.subscribe("file:///nonexistent.txt", callback));
+}
+
+test "ResourceRegistry subscriptions disabled" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    // subscriptions not enabled by default
+    try std.testing.expectEqual(false, registry.supports_subscriptions);
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+    });
+
+    const callback = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+    }.notify;
+
+    try std.testing.expectError(error.SubscriptionsNotSupported, registry.subscribe("file:///test.txt", callback));
+}
+
+test "ResourceRegistry get subscription count" {
+    const allocator = std.testing.allocator;
+    var registry = ResourceRegistry.init(allocator);
+    defer registry.deinit();
+
+    registry.supports_subscriptions = true;
+
+    try registry.register(.{
+        .uri = "file:///test.txt",
+        .name = "Test File",
+    });
+
+    const callback = struct {
+        fn notify(_: std.mem.Allocator, _: []const u8) anyerror!void {}
+    }.notify;
+
+    try std.testing.expectEqual(@as(usize, 0), registry.getSubscriptionCount("file:///test.txt"));
+
+    try registry.subscribe("file:///test.txt", callback);
+    try std.testing.expectEqual(@as(usize, 1), registry.getSubscriptionCount("file:///test.txt"));
 }

@@ -359,6 +359,41 @@ const error_response = try mcp.buildErrorResponse(allocator, id, .MethodNotFound
 defer allocator.free(error_response);
 ```
 
+### Resources with Subscriptions (`mcp.primitives.resource`)
+
+Manage resources with dynamic subscriptions:
+
+```zig
+// Initialize resource registry with subscription support
+var resources = mcp.ResourceRegistry.init(allocator);
+defer resources.deinit();
+resources.supports_subscriptions = true;
+
+// Register a resource
+try resources.register(.{
+    .uri = "file:///config.json",
+    .name = "Configuration",
+    .description = "Application configuration",
+    .mimeType = "application/json",
+    .handler = configHandler,
+});
+
+// Subscribe to updates
+const update_callback = struct {
+    fn onUpdate(_: std.mem.Allocator, uri: []const u8) !void {
+        std.debug.print("Resource updated: {s}\n", .{uri});
+    }
+}.onUpdate;
+
+try resources.subscribe("file:///config.json", update_callback);
+
+// Later, notify subscribers of changes
+try resources.notifyUpdate("file:///config.json");
+
+// Unsubscribe when done
+try resources.unsubscribe("file:///config.json");
+```
+
 ### Logging (`mcp.logger`)
 
 Flexible logging interface:
