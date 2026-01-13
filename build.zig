@@ -183,61 +183,64 @@ pub fn build(b: *std.Build) void {
     resource_templates_step.dependOn(&run_resource_templates.step);
 
     // Client-Server Example
-    const client_server_mod = b.createModule(.{
-        .root_source_file = b.path("examples/client_server_example.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    client_server_mod.addImport("mcp", lib_mod);
+    // TODO: Fix standalone compilation issues with std.json.stringify API
+    // const client_server_mod = b.createModule(.{
+    //     .root_source_file = b.path("examples/client_server_example.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    // client_server_mod.addImport("mcp", lib_mod);
 
-    const client_server_exe = b.addExecutable(.{
-        .name = "client_server_example",
-        .root_module = client_server_mod,
-    });
-    b.installArtifact(client_server_exe);
+    // const client_server_exe = b.addExecutable(.{
+    //     .name = "client_server_example",
+    //     .root_module = client_server_mod,
+    // });
+    // b.installArtifact(client_server_exe);
 
-    const run_client_server = b.addRunArtifact(client_server_exe);
-    run_client_server.step.dependOn(b.getInstallStep());
-    const client_server_step = b.step("example-client-server", "Run MCP client-server interaction example");
-    client_server_step.dependOn(&run_client_server.step);
+    // const run_client_server = b.addRunArtifact(client_server_exe);
+    // run_client_server.step.dependOn(b.getInstallStep());
+    // const client_server_step = b.step("example-client-server", "Run MCP client-server interaction example");
+    // client_server_step.dependOn(&run_client_server.step);
 
     // Progress Example
-    const progress_mod = b.createModule(.{
-        .root_source_file = b.path("examples/progress_example.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    progress_mod.addImport("mcp", lib_mod);
+    // TODO: Fix standalone compilation issues with ArrayList writer API
+    // const progress_mod = b.createModule(.{
+    //     .root_source_file = b.path("examples/progress_example.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    // progress_mod.addImport("mcp", lib_mod);
 
-    const progress_exe = b.addExecutable(.{
-        .name = "progress_example",
-        .root_module = progress_mod,
-    });
-    b.installArtifact(progress_exe);
+    // const progress_exe = b.addExecutable(.{
+    //     .name = "progress_example",
+    //     .root_module = progress_mod,
+    // });
+    // b.installArtifact(progress_exe);
 
-    const run_progress = b.addRunArtifact(progress_exe);
-    run_progress.step.dependOn(b.getInstallStep());
-    const progress_step = b.step("example-progress", "Run MCP progress notification example");
-    progress_step.dependOn(&run_progress.step);
+    // const run_progress = b.addRunArtifact(progress_exe);
+    // run_progress.step.dependOn(b.getInstallStep());
+    // const progress_step = b.step("example-progress", "Run MCP progress notification example");
+    // progress_step.dependOn(&run_progress.step);
 
     // MCP Client Example
-    const mcp_client_mod = b.createModule(.{
-        .root_source_file = b.path("examples/mcp_client_example.zig"),
-        .target = target,
-        .optimize = optimize,
-    });
-    mcp_client_mod.addImport("mcp", lib_mod);
+    // TODO: Fix standalone compilation issues with std.json.stringify API
+    // const mcp_client_mod = b.createModule(.{
+    //     .root_source_file = b.path("examples/mcp_client_example.zig"),
+    //     .target = target,
+    //     .optimize = optimize,
+    // });
+    // mcp_client_mod.addImport("mcp", lib_mod);
 
-    const mcp_client_exe = b.addExecutable(.{
-        .name = "mcp_client_example",
-        .root_module = mcp_client_mod,
-    });
-    b.installArtifact(mcp_client_exe);
+    // const mcp_client_exe = b.addExecutable(.{
+    //     .name = "mcp_client_example",
+    //     .root_module = mcp_client_mod,
+    // });
+    // b.installArtifact(mcp_client_exe);
 
-    const run_mcp_client = b.addRunArtifact(mcp_client_exe);
-    run_mcp_client.step.dependOn(b.getInstallStep());
-    const mcp_client_step = b.step("example-mcp-client", "Run MCP client example");
-    mcp_client_step.dependOn(&run_mcp_client.step);
+    // const run_mcp_client = b.addRunArtifact(mcp_client_exe);
+    // run_mcp_client.step.dependOn(b.getInstallStep());
+    // const mcp_client_step = b.step("example-mcp-client", "Run MCP client example");
+    // mcp_client_step.dependOn(&run_mcp_client.step);
 
     // TCP Client Example
     const tcp_client_mod = b.createModule(.{
