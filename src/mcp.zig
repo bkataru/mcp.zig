@@ -6,6 +6,7 @@ const Resource = @import("primitives/resource.zig");
 const jsonrpc = @import("jsonrpc.zig");
 const network = @import("network.zig");
 const constants = @import("constants.zig");
+const types = @import("types.zig");
 
 /// MCP Protocol version - aligned with latest specification
 pub const PROTOCOL_VERSION = constants.MCP_PROTOCOL_VERSION;
@@ -22,12 +23,41 @@ pub const ServerState = enum {
 /// Tool handler function signature - matches reference implementations
 pub const ToolHandler = *const fn (allocator: std.mem.Allocator, params: std.json.Value) anyerror!std.json.Value;
 
+/// Tool handler function signature with cancellation support
+pub const ToolHandlerWithCancellation = *const fn (allocator: std.mem.Allocator, params: std.json.Value, cancellation_token: ?*CancellationToken) anyerror!std.json.Value;
+
+/// Sampling handler function signature
+pub const SamplingHandler = *const fn (allocator: std.mem.Allocator, request: types.CreateMessageRequest) anyerror!types.CreateMessageResult;
+
 /// MCP Tool definition - simplified from reference patterns
 pub const MCPTool = struct {
     name: []const u8,
     description: []const u8,
     handler: ToolHandler,
+    handler_with_cancellation: ?ToolHandlerWithCancellation = null,
     input_schema: ?[]const u8 = null,
+};
+
+/// Request cancellation token
+pub const CancellationToken = struct {
+    cancelled: std.atomic.Value(bool),
+    reason: ?[]const u8,
+
+    pub fn init() @This() {
+        return .{
+            .cancelled = std.atomic.Value(bool).init(false),
+            .reason = null,
+        };
+    }
+
+    pub fn cancel(self: *@This(), reason: ?[]const u8) void {
+        self.cancelled.store(true, .release);
+        self.reason = reason;
+    }
+
+    pub fn isCancelled(self: *@This()) bool {
+        return self.cancelled.load(.acquire);
+    }
 };
 
 /// Enhanced MCP Server implementation
@@ -36,16 +66,20 @@ pub const MCPServer = struct {
     parent_allocator: std.mem.Allocator,
     state: ServerState,
     tools: std.StringHashMap(MCPTool),
+    sampling_handler: ?SamplingHandler = null,
     request_context: ?*std.heap.ArenaAllocator = null,
+    active_requests: std.AutoHashMap(u64, *CancellationToken),
 
     /// Initialize a new MCP server instance
     pub fn init(allocator: std.mem.Allocator) !@This() {
         const tools = std.StringHashMap(MCPTool).init(allocator);
+        const active_requests = std.AutoHashMap(u64, *CancellationToken).init(allocator);
 
         return .{
             .parent_allocator = allocator,
             .state = .created,
             .tools = tools,
+            .active_requests = active_requests,
         };
     }
 
@@ -69,6 +103,56 @@ pub const MCPServer = struct {
 
         try self.tools.put(persistent_name, persistent_tool);
         std.log.debug("Registered tool: {s}", .{tool_def.name});
+    }
+
+    /// Set the sampling handler for server-initiated LLM sampling
+    pub fn setSamplingHandler(self: *@This(), handler: SamplingHandler) void {
+        self.sampling_handler = handler;
+        std.log.debug("Sampling handler registered", .{});
+    }
+
+    /// Get a hashable ID from RequestId
+    fn getRequestIdHash(id: jsonrpc.RequestId) u64 {
+        return switch (id) {
+            .string => |s| std.hash.Wyhash.hash(0, s),
+            .integer => |i| @as(u64, @intCast(i)),
+        };
+    }
+
+    /// Register a request for potential cancellation
+    pub fn registerRequest(self: *@This(), request_id: jsonrpc.RequestId) !*CancellationToken {
+        const hash = getRequestIdHash(request_id);
+        const token = try self.parent_allocator.create(CancellationToken);
+        token.* = CancellationToken.init();
+        try self.active_requests.put(hash, token);
+        return token;
+    }
+
+    /// Cancel a request by ID
+    pub fn cancelRequest(self: *@This(), request_id: jsonrpc.RequestId, reason: ?[]const u8) !bool {
+        const hash = getRequestIdHash(request_id);
+        if (self.active_requests.get(hash)) |token| {
+            token.cancel(reason);
+            return true;
+        }
+        return false;
+    }
+
+    /// Check if a request is cancelled
+    pub fn isRequestCancelled(self: *@This(), request_id: jsonrpc.RequestId) bool {
+        const hash = getRequestIdHash(request_id);
+        if (self.active_requests.get(hash)) |token| {
+            return token.isCancelled();
+        }
+        return false;
+    }
+
+    /// Clean up a completed request
+    pub fn completeRequest(self: *@This(), request_id: jsonrpc.RequestId) void {
+        const hash = getRequestIdHash(request_id);
+        if (self.active_requests.fetchRemove(hash)) |entry| {
+            self.parent_allocator.destroy(entry.value);
+        }
     }
 
     /// Handle an MCP protocol request with arena allocator pattern
@@ -117,6 +201,10 @@ pub const MCPServer = struct {
             return try self.handleToolsList(arena, id);
         } else if (std.mem.eql(u8, method.string, "tools/call")) {
             return try self.handleToolCall(arena, params, id);
+        } else if (std.mem.eql(u8, method.string, "sampling/createMessage")) {
+            return try self.handleSamplingCreateMessage(arena, params, id);
+        } else if (std.mem.eql(u8, method.string, "notifications/cancelled")) {
+            return try self.handleCancellation(arena, params);
         }
 
         // Method not found
@@ -150,6 +238,11 @@ pub const MCPServer = struct {
         var tools_capability = std.json.Value{ .object = std.json.ObjectMap.init(arena) };
         try tools_capability.object.put("enabled", std.json.Value{ .bool = true });
         try capabilities.object.put("tools", tools_capability);
+
+        // Add sampling capability if handler is registered
+        if (self.sampling_handler != null) {
+            try capabilities.object.put("sampling", std.json.Value{ .bool = true });
+        }
 
         // Create server info
         var server_info = std.json.Value{ .object = std.json.ObjectMap.init(arena) };
@@ -227,8 +320,37 @@ pub const MCPServer = struct {
 
         const tool_params = params.object.get("arguments") orelse std.json.Value{ .object = std.json.ObjectMap.init(arena) };
 
-        // Execute the tool
-        const tool_result = tool_def.handler(arena, tool_params) catch |err| {
+        // Convert id to RequestId for cancellation tracking
+        var request_id: ?jsonrpc.RequestId = null;
+        if (id) |id_val| {
+            request_id = switch (id_val) {
+                .string => |s| jsonrpc.RequestId{ .string = s },
+                .integer => |i| jsonrpc.RequestId{ .integer = i },
+                else => null,
+            };
+        }
+
+        // Register the request for cancellation if we have a handler that supports it
+        var cancellation_token: ?*CancellationToken = null;
+        if (tool_def.handler_with_cancellation != null and request_id != null) {
+            cancellation_token = try self.registerRequest(request_id.?);
+        }
+
+        // Ensure we clean up the cancellation token when done
+        defer {
+            if (cancellation_token != null and request_id != null) {
+                self.completeRequest(request_id.?);
+            }
+        }
+
+        // Execute the tool with the appropriate handler
+        const tool_result = blk: {
+            if (tool_def.handler_with_cancellation != null) {
+                break :blk tool_def.handler_with_cancellation.?(arena, tool_params, cancellation_token);
+            } else {
+                break :blk tool_def.handler(arena, tool_params);
+            }
+        } catch |err| {
             const error_msg = std.fmt.allocPrint(arena, "Tool execution failed: {any}", .{err}) catch "Tool execution failed";
             const error_response = try self.createErrorResponse(arena, id, .internalError, error_msg);
             return try self.stringifyResponse(error_response);
@@ -243,9 +365,13 @@ pub const MCPServer = struct {
         const text_result = switch (tool_result) {
             .string => |s| s,
             else => blk: {
-                var result_str = std.ArrayList(u8).init(arena);
-                try std.json.stringify(tool_result, .{}, result_str.writer());
-                break :blk try result_str.toOwnedSlice();
+                var out: std.io.Writer.Allocating = .init(arena);
+                errdefer out.deinit();
+                var stringify: std.json.Stringify = .{
+                    .writer = &out.writer,
+                };
+                try stringify.write(tool_result);
+                break :blk try out.toOwnedSlice();
             },
         };
 
@@ -257,6 +383,71 @@ pub const MCPServer = struct {
 
         const response = try self.createSuccessResponse(arena, id, result);
         return try self.stringifyResponse(response);
+    }
+
+    /// Handle sampling/createMessage request
+    fn handleSamplingCreateMessage(self: *@This(), arena: std.mem.Allocator, params: std.json.Value, id: ?std.json.Value) ![]const u8 {
+        // Check if sampling handler is registered
+        const handler = self.sampling_handler orelse {
+            const error_response = try self.createErrorResponse(arena, id, .methodNotFound, "Sampling not supported - no handler registered");
+            return try self.stringifyResponse(error_response);
+        };
+
+        // Parse the sampling request
+        const create_request = try std.json.parseFromValue(types.CreateMessageRequest, arena, params, .{});
+
+        // Call the sampling handler
+        const result = try handler(arena, create_request.value);
+
+        // Convert result to JSON response
+        var json_result_map = std.json.ObjectMap.init(arena);
+        const json_result = std.json.Value{ .object = json_result_map };
+
+        try json_result_map.put("role", std.json.Value{ .string = result.role });
+
+        // Convert content based on type
+        switch (result.content) {
+            .text => |text| {
+                var content_obj = std.json.Value{ .object = std.json.ObjectMap.init(arena) };
+                try content_obj.object.put("type", std.json.Value{ .string = "text" });
+                try content_obj.object.put("text", std.json.Value{ .string = text.text });
+                try json_result_map.put("content", content_obj);
+            },
+            else => {
+                const error_response = try self.createErrorResponse(arena, id, .internalError, "Unsupported content type in sampling result");
+                return try self.stringifyResponse(error_response);
+            },
+        }
+
+        try json_result_map.put("model", std.json.Value{ .string = result.model });
+
+        if (result.stopReason) |stop_reason| {
+            try json_result_map.put("stopReason", std.json.Value{ .string = stop_reason });
+        }
+
+        const response = try self.createSuccessResponse(arena, id, json_result);
+        return try self.stringifyResponse(response);
+    }
+
+    /// Handle request cancellation notifications
+    fn handleCancellation(self: *@This(), arena: std.mem.Allocator, params: std.json.Value) ![]const u8 {
+        _ = arena; // Notification - no response needed
+
+        // Parse the cancellation notification
+        const cancellation = try std.json.parseFromValue(types.CancelledNotification, self.parent_allocator, params, .{});
+        defer cancellation.deinit();
+
+        // Attempt to cancel the request
+        const cancelled = try self.cancelRequest(cancellation.value.requestId, cancellation.value.reason);
+
+        if (cancelled) {
+            std.log.debug("Request cancelled: {any}", .{cancellation.value.requestId});
+        } else {
+            std.log.debug("Request not found for cancellation: {any}", .{cancellation.value.requestId});
+        }
+
+        // Cancellation notifications don't require a response
+        return try self.parent_allocator.dupe(u8, "");
     }
 
     /// Create a JSON-RPC success response
@@ -293,13 +484,24 @@ pub const MCPServer = struct {
 
     /// Convert JSON value to string
     fn stringifyResponse(self: *@This(), response: std.json.Value) ![]const u8 {
-        var result = std.ArrayList(u8).init(self.parent_allocator);
-        try std.json.stringify(response, .{}, result.writer());
-        return try result.toOwnedSlice();
+        var out: std.io.Writer.Allocating = .init(self.parent_allocator);
+        errdefer out.deinit();
+        var stringify: std.json.Stringify = .{
+            .writer = &out.writer,
+        };
+        try stringify.write(response);
+        return out.toOwnedSlice();
     }
 
     /// Clean up server resources
     pub fn deinit(self: *@This()) void {
+        // Clean up active requests
+        var request_iter = self.active_requests.iterator();
+        while (request_iter.next()) |entry| {
+            self.parent_allocator.destroy(entry.value_ptr.*);
+        }
+        self.active_requests.deinit();
+
         // Clean up tool definitions
         var tool_iter = self.tools.iterator();
         while (tool_iter.next()) |entry| {

@@ -7,6 +7,7 @@
 
 const std = @import("std");
 const constants = @import("constants.zig");
+const jsonrpc = @import("jsonrpc.zig");
 const Allocator = std.mem.Allocator;
 
 // ==================== Common Types ====================
@@ -43,9 +44,10 @@ pub const ServerCapabilities = struct {
         listChanged: bool = false,
     } = null,
     resources: ?struct {
-        listChanged: bool = false,
         subscribe: bool = false,
+        listChanged: bool = false,
     } = null,
+    sampling: ?std.json.Value = null,
     tools: ?struct {
         listChanged: bool = false,
     } = null,
@@ -632,3 +634,61 @@ test "ResourceContent with text" {
     try std.testing.expect(content.text != null);
     try std.testing.expectEqualStrings("Hello, world!", content.text.?);
 }
+
+// ==================== Cancellation Types ====================
+
+/// Request cancellation parameters
+pub const CancelledNotification = struct {
+    /// The ID of the request to cancel
+    requestId: jsonrpc.RequestId,
+    /// An optional reason for the cancellation
+    reason: ?[]const u8 = null,
+};
+
+// ==================== Sampling Types ====================
+
+/// Sampling request parameters
+pub const CreateMessageRequest = struct {
+    messages: []const SamplingMessage,
+    modelPreferences: ?ModelPreferences = null,
+    systemPrompt: ?[]const u8 = null,
+    includeContext: ?IncludeContext = null,
+    temperature: ?f64 = null,
+    maxTokens: ?u32 = null,
+    stopSequences: ?[]const []const u8 = null,
+    metadata: ?std.json.Value = null,
+};
+
+/// Model preferences for sampling
+pub const ModelPreferences = struct {
+    hints: ?[]const ModelHint = null,
+    costPriority: ?f64 = null,
+    speedPriority: ?f64 = null,
+    intelligencePriority: ?f64 = null,
+};
+
+/// Model hint
+pub const ModelHint = struct {
+    name: ?[]const u8 = null,
+};
+
+/// Sampling message
+pub const SamplingMessage = struct {
+    role: []const u8,
+    content: Content,
+};
+
+/// Context to include in sampling
+pub const IncludeContext = enum {
+    none,
+    thisServer,
+    allServers,
+};
+
+/// Sampling response
+pub const CreateMessageResult = struct {
+    role: []const u8,
+    content: Content,
+    model: []const u8,
+    stopReason: ?[]const u8 = null,
+};

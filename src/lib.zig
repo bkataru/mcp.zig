@@ -113,8 +113,15 @@ pub const MemoryTracker = memory.MemoryTracker;
 pub const mcp = @import("mcp.zig");
 pub const MCPServer = mcp.MCPServer;
 pub const MCPTool = mcp.MCPTool;
+pub const CancellationToken = mcp.CancellationToken;
 pub const Session = mcp.Session;
 pub const ServerState = mcp.ServerState;
+
+// Progress notifications
+pub const progress = @import("progress.zig");
+pub const ProgressToken = progress.ProgressToken;
+pub const ProgressTracker = progress.ProgressTracker;
+pub const ProgressBuilder = progress.ProgressBuilder;
 
 // ==================== Primitives ====================
 

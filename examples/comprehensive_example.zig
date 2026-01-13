@@ -156,8 +156,9 @@ fn registerTools(server: *mcp.MCPServer) !void {
 
 fn handleInitialize(allocator: std.mem.Allocator, id: ?std.json.Value) ![]const u8 {
     var capabilities = std.json.ObjectMap.init(allocator);
-    var tools_cap = std.json.ObjectMap.init(allocator);
-    try capabilities.put("tools", std.json.Value{ .object = tools_cap });
+    var tools_capability = std.json.ObjectMap.init(allocator);
+    try tools_capability.put("enabled", std.json.Value{ .bool = true });
+    try capabilities.put("tools", std.json.Value{ .object = tools_capability });
 
     var server_info = std.json.ObjectMap.init(allocator);
     try server_info.put("name", std.json.Value{ .string = "comprehensive-mcp-server" });
