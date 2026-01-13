@@ -1,4 +1,5 @@
 const std = @import("std");
+const constants = @import("constants.zig");
 const Tool = @import("./primitives/tool.zig").Tool;
 const ToolRegistry = @import("./primitives/tool.zig").ToolRegistry;
 const Resource = @import("./primitives/resource.zig").Resource;
@@ -6,9 +7,6 @@ const ResourceRegistry = @import("./primitives/resource.zig").ResourceRegistry;
 const ResourceContent = @import("./primitives/resource.zig").ResourceContent;
 const Prompt = @import("./primitives/prompt.zig").Prompt;
 const PromptRegistry = @import("./primitives/prompt.zig").PromptRegistry;
-
-/// JSON-RPC protocol version
-pub const VERSION = "2.0";
 
 /// JSON-RPC 2.0 Error codes
 pub const ErrorCode = struct {
@@ -48,7 +46,7 @@ pub const Error = struct {
 
 /// JSON-RPC 2.0 Request object
 pub const Request = struct {
-    jsonrpc: []const u8 = VERSION,
+    jsonrpc: []const u8 = constants.JSON_RPC_VERSION,
     method: []const u8,
     params: ?std.json.Value = null,
     id: ?RequestId = null,
@@ -56,7 +54,7 @@ pub const Request = struct {
 
 /// JSON-RPC 2.0 Response object
 pub const Response = struct {
-    jsonrpc: []const u8 = VERSION,
+    jsonrpc: []const u8 = constants.JSON_RPC_VERSION,
     result: ?std.json.Value = null,
     err: ?Error = null,
     id: ?RequestId = null,
@@ -97,7 +95,7 @@ pub fn parseRequest(allocator: std.mem.Allocator, json_str: []const u8) ParseErr
 
     // Validate jsonrpc version
     if (obj.get("jsonrpc")) |version_val| {
-        if (version_val != .string or !std.mem.eql(u8, version_val.string, VERSION)) {
+        if (version_val != .string or !std.mem.eql(u8, version_val.string, constants.JSON_RPC_VERSION)) {
             return ParseError.InvalidVersion;
         }
     } else {
