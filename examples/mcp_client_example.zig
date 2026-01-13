@@ -17,10 +17,10 @@ pub fn main() !void {
     const stream = try net.tcpConnectToAddress(address);
     defer stream.close();
 
-    std.debug.print("Connected to MCP server at {}\n", .{address});
+    std.debug.print("Connected to MCP server at {any}\n", .{address});
 
     // Create a basic initialize request
-    const request = try std.json.stringifyAlloc(allocator, .{
+    const request_json = .{
         .jsonrpc = "2.0",
         .id = 1,
         .method = "initialize",
@@ -32,11 +32,15 @@ pub fn main() !void {
                 .version = "1.0.0",
             },
         },
-    }, .{});
-    defer allocator.free(request);
+    };
+
+    const U8ArrayList = std.array_list.AlignedManaged(u8, null);
+    var request_buffer = U8ArrayList.init(allocator);
+    defer request_buffer.deinit();
+    try std.json.stringify(request_json, .{}, request_buffer.writer());
 
     // Send the request
-    const request_with_newline = try std.fmt.allocPrint(allocator, "{s}\n", .{request});
+    const request_with_newline = try std.fmt.allocPrint(allocator, "{s}\n", .{request_buffer.items});
     defer allocator.free(request_with_newline);
 
     _ = try stream.write(request_with_newline);

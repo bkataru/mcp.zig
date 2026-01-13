@@ -17,7 +17,7 @@ pub fn main() !void {
     defer server.deinit();
 
     // Add a simple calculator tool
-    try server.addTool(.{
+    try server.registerTool(.{
         .name = "add",
         .description = "Add two numbers together",
         .input_schema =
@@ -31,9 +31,8 @@ pub fn main() !void {
         \\}
         ,
         .handler = struct {
-            fn handler(srv: *mcp.MCPServer, tool_name: []const u8, arguments: std.json.Value) !std.json.Value {
-                _ = srv;
-                _ = tool_name;
+            fn handler(alloc: std.mem.Allocator, arguments: std.json.Value) !std.json.Value {
+                _ = alloc;
 
                 const a = arguments.object.get("a").?.float;
                 const b = arguments.object.get("b").?.float;
@@ -55,11 +54,11 @@ pub fn main() !void {
     // Accept connections
     while (true) {
         const connection = tcp_server.accept() catch |err| {
-            std.debug.print("Failed to accept connection: {}\n", .{err});
+            std.debug.print("Failed to accept connection: {any}\n", .{err});
             continue;
         };
 
-        std.debug.print("New client connected from {}\n", .{connection.address});
+        std.debug.print("New client connected from {any}\n", .{connection.address});
 
         // Handle connection in a new thread
         const thread = try std.Thread.spawn(.{}, handleConnection, .{ connection.stream, &server, allocator });
@@ -67,7 +66,7 @@ pub fn main() !void {
     }
 }
 
-fn handleConnection(stream: net.Stream, server: *mcp.MCPServer, allocator: std.mem.Allocator) void {
+fn handleConnection(stream: net.Stream, server: *mcp.MCPServer, allocator: std.mem.Allocator) !void {
     _ = server; // TODO: Use server for actual MCP protocol handling
     // Create a simple line-based protocol handler
     var buffer: [4096]u8 = undefined;

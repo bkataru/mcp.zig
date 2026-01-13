@@ -17,7 +17,7 @@ pub fn main() !void {
     defer server_thread.join();
 
     // Give server time to start
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Run client
     try runTcpClient(allocator);
@@ -29,7 +29,7 @@ fn runTcpServer(allocator: std.mem.Allocator) !void {
     defer server.deinit();
 
     // Add calculator tool
-    try server.addTool(.{
+    try server.registerTool(.{
         .name = "calculate",
         .description = "Perform basic arithmetic operations",
         .input_schema =
@@ -44,7 +44,8 @@ fn runTcpServer(allocator: std.mem.Allocator) !void {
         \\}
         ,
         .handler = struct {
-            fn handler(_: *mcp.MCPServer, _: []const u8, arguments: std.json.Value) !std.json.Value {
+            fn handler(alloc: std.mem.Allocator, arguments: std.json.Value) !std.json.Value {
+                _ = alloc;
                 const op = arguments.object.get("operation").?.string;
                 const a = arguments.object.get("a").?.float;
                 const b = arguments.object.get("b").?.float;
@@ -65,7 +66,7 @@ fn runTcpServer(allocator: std.mem.Allocator) !void {
 
     // Accept one connection for this demo
     const connection = try listener.accept();
-    std.debug.print("Client connected from {}\n", .{connection.address});
+    std.debug.print("Client connected from {any}\n", .{connection.address});
 
     // Handle the connection
     try handleMcpConnection(connection.stream, &server, allocator);
@@ -168,7 +169,7 @@ fn handleMcpConnection(stream: net.Stream, server: *mcp.MCPServer, allocator: st
             const result = if (std.mem.eql(u8, op, "add")) a + b else if (std.mem.eql(u8, op, "subtract")) a - b else if (std.mem.eql(u8, op, "multiply")) a * b else if (std.mem.eql(u8, op, "divide")) a / b else 0;
 
             const response = try std.fmt.allocPrint(allocator,
-                \\{"jsonrpc":"2.0","id":3,"result":{"content":[{"type":"text","text":"Result: {d}"}]}}
+                \\{{"jsonrpc":"2.0","id":3,"result":{{"content":[{{"type":"text","text":"Result: {d}"}}]}}}}
                 \\
             , .{result});
             defer allocator.free(response);

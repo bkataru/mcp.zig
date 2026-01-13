@@ -198,7 +198,7 @@ pub fn main() !void {
 
 fn handleRequestAsync(server: *mcp.MCPServer, request_json: []const u8) void {
     const response = server.handleRequest(request_json) catch |err| {
-        std.debug.print("Request failed: {}\n", .{err});
+        std.debug.print("Request failed: {any}\n", .{err});
         return;
     };
     defer server.parent_allocator.free(response);

@@ -16,9 +16,10 @@ pub fn main() !void {
     var tracker = mcp.progress.ProgressTracker.init(allocator, token);
 
     // Create a writer to demonstrate progress updates
-    var buffer = std.ArrayList(u8).initCapacity(allocator, 1024);
-    defer buffer.deinit(allocator);
-    const writer = buffer.writer(allocator).any();
+    const U8ArrayList = std.array_list.AlignedManaged(u8, null);
+    var buffer = U8ArrayList.init(allocator);
+    defer buffer.deinit();
+    const writer = buffer.writer();
 
     // Simulate a long-running operation with progress updates
     std.debug.print("Starting example operation...\n", .{});
