@@ -37,5 +37,8 @@ project_overview.json
 research.txt
 architecture.txt
 
+# Development tools
+.crush/
+
 # Reference implementations (if cloned locally)
 references/
