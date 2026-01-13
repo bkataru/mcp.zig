@@ -16,7 +16,7 @@ pub fn main() !void {
     defer server_thread.join();
 
     // Give the server a moment to start
-    std.time.sleep(100 * std.time.ns_per_ms);
+    std.Thread.sleep(100 * std.time.ns_per_ms);
 
     // Run the client
     try runClient(allocator);
@@ -28,7 +28,7 @@ fn runServer(allocator: std.mem.Allocator) !void {
     // This would normally be your MCP server implementation
     // For this example, we'll just simulate a simple echo server
 
-    var server = mcp.Server.init(allocator, "127.0.0.1", 8081);
+    var server = mcp.MCPServer.init(allocator);
     defer server.deinit();
 
     // In a real implementation, you would:
@@ -39,7 +39,7 @@ fn runServer(allocator: std.mem.Allocator) !void {
     std.debug.print("MCP server started on port 8081\n", .{});
 
     // For this demo, we'll just wait a bit then exit
-    std.time.sleep(2 * std.time.ns_per_s);
+    std.Thread.sleep(2 * std.time.ns_per_s);
 }
 
 fn runClient(allocator: std.mem.Allocator) !void {
@@ -52,7 +52,10 @@ fn runClient(allocator: std.mem.Allocator) !void {
     std.debug.print("Client connected to server\n", .{});
 
     // Send initialize request
-    const init_request = try std.json.stringifyAlloc(allocator, .{
+    const U8ArrayList = std.array_list.AlignedManaged(u8, null);
+    var init_buffer = U8ArrayList.init(allocator);
+    defer init_buffer.deinit();
+    try std.json.stringify(.{
         .jsonrpc = "2.0",
         .id = 1,
         .method = "initialize",
@@ -64,10 +67,9 @@ fn runClient(allocator: std.mem.Allocator) !void {
                 .version = "1.0.0",
             },
         },
-    }, .{});
-    defer allocator.free(init_request);
+    }, .{}, init_buffer.writer());
 
-    _ = try stream.write(init_request);
+    _ = try stream.write(init_buffer.items);
     _ = try stream.write("\n");
 
     std.debug.print("Sent initialize request\n", .{});
