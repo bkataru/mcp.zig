@@ -22,86 +22,127 @@ MCP is an open protocol that enables secure connections between AI assistants an
 
 ## Installation
 
-Add this package to your `build.zig.zon`:
+### Option 1: Using `zig fetch` (Recommended)
+
+The easiest way to add `mcp.zig` as a dependency is using the `zig fetch` command, which automatically downloads the package and computes the hash for you:
+
+**Using Git URL (recommended):**
+
+```bash
+zig fetch --save git+https://github.com/bkataru/mcp.zig.git
+```
+
+**Using tarball URL:**
+
+```bash
+zig fetch --save https://github.com/bkataru/mcp.zig/archive/refs/heads/main.tar.gz
+```
+
+**To fetch a specific version or tag:**
+
+```bash
+# Using git URL with tag reference
+zig fetch --save git+https://github.com/bkataru/mcp.zig.git#v0.1.0
+
+# Or using tarball URL for a specific tag
+zig fetch --save https://github.com/bkataru/mcp.zig/archive/refs/tags/v0.1.0.tar.gz
+```
+
+**To save with a custom dependency name:**
+
+```bash
+zig fetch --save=mcp git+https://github.com/bkataru/mcp.zig.git
+```
+
+> **Note:** The `git+https://` protocol clones the repository directly, while tarball URLs download a snapshot archive. Git URLs are generally more reliable for version pinning.
+
+### Option 2: Manual Configuration
+
+Alternatively, you can manually add `mcp.zig` as a dependency in your `build.zig.zon`:
 
 ```zig
 .dependencies = .{
     .mcp = .{
-        .url = "https://github.com/bkataru/mcp.zig/archive/refs/heads/main.tar.gz",
-        .hash = "...",
+        // Using git URL (recommended)
+        .url = "git+https://github.com/bkataru/mcp.zig.git",
+        // Or using tarball URL:
+        // .url = "https://github.com/bkataru/mcp.zig/archive/refs/heads/main.tar.gz",
+        .hash = "...", // Run `zig build` to get the correct hash
     },
 },
 ```
 
-Then in your `build.zig`:
+**Note:** On the first build attempt, Zig will display the correct hash value. Copy that hash and update your `build.zig.zon` file accordingly.
+
+### Option 3: Local Path Dependency
+
+For local development or when vendoring:
 
 ```zig
-const mcp = b.dependency("mcp", .{
-    .target = target,
-    .optimize = optimize,
-});
-exe.root_module.addImport("mcp", mcp.module("mcp"));
+.dependencies = .{
+    .mcp = .{
+        .path = "../mcp.zig",
+    },
+},
+```
+
+### Configuring `build.zig`
+
+After adding the dependency (via any method above), add the following to your `build.zig`:
+
+```zig
+const std = @import("std");
+
+pub fn build(b: *std.Build) void {
+    const target = b.standardTargetOptions(.{});
+    const optimize = b.standardOptimizeOption(.{});
+
+    // Fetch the mcp dependency
+    const mcp_dep = b.dependency("mcp", .{
+        .target = target,
+        .optimize = optimize,
+    });
+
+    // Get the module from the dependency
+    const mcp_mod = mcp_dep.module("mcp");
+
+    // Create your executable
+    const exe = b.addExecutable(.{
+        .name = "my_mcp_server",
+        .root_module = b.createModule(.{
+            .root_source_file = b.path("src/main.zig"),
+            .target = target,
+            .optimize = optimize,
+        }),
+    });
+
+    // Add the mcp import to your executable
+    exe.root_module.addImport("mcp", mcp_mod);
+
+    b.installArtifact(exe);
+}
+```
+
+### Building from Source
+
+```bash
+# Clone the repository
+git clone https://github.com/bkataru/mcp.zig.git
+cd mcp.zig
+
+# Build the library and server
+zig build
+
+# Run tests
+zig build test
+
+# Build release version
+zig build -Doptimize=ReleaseFast
 ```
 
 ## Quick Start
 
-### Using the Method Dispatcher (Recommended)
-
-```zig
-const std = @import("std");
-const mcp = @import("mcp");
-
-pub fn main() !void {
-    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
-    defer _ = gpa.deinit();
-    const allocator = gpa.allocator();
-
-    // Create method registry
-    var registry = mcp.MethodRegistry.init(allocator);
-    defer registry.deinit();
-
-    // Register handlers
-    try registry.add("initialize", handleInitialize);
-    try registry.add("tools/list", handleToolsList);
-    try registry.add("tools/call", handleToolsCall);
-
-    // Set up lifecycle hooks
-    registry.setHooks(.{
-        .on_before = logRequest,
-        .on_error = logError,
-    });
-
-    // Run Content-Length streaming server
-    const stdin = std.fs.cwd().openFile("/dev/stdin", .{});
-    const stdout = std.fs.cwd().openFile("/dev/stdout", .{ .mode = .write_only });
-    
-    while (true) {
-        const message = try mcp.readContentLengthFrame(allocator, stdin.reader());
-        defer allocator.free(message);
-        
-        var parsed = try mcp.parseRequest(allocator, message);
-        defer parsed.deinit();
-        
-        var ctx = mcp.DispatchContext.init(allocator, &parsed.request);
-        const result = try registry.asDispatcher().dispatch(&ctx);
-        
-        const response = try mcp.buildResponse(allocator, ctx.request.id, result.value);
-        defer allocator.free(response);
-        
-        try mcp.writeContentLengthFrame(stdout.writer(), response);
-    }
-}
-
-fn handleInitialize(ctx: *mcp.DispatchContext, _: ?std.json.Value) !mcp.DispatchResult {
-    return mcp.DispatchResult.jsonValue(mcp.InitializeResult{
-        .protocolVersion = mcp.PROTOCOL_VERSION,
-        .capabilities = .{ .tools = .{ .listChanged = true } },
-        .serverInfo = .{ .name = "my-server", .version = "1.0.0" },
-    });
-}
-```
-
-### Legacy MCPServer Usage
+### Basic MCP Server
 
 ```zig
 const std = @import("std");
@@ -132,7 +173,7 @@ pub fn main() !void {
         },
     }, greetHandler);
 
-    // Run the server
+    // Run the server (stdio by default)
     try server.run();
 }
 
@@ -143,17 +184,58 @@ fn greetHandler(allocator: std.mem.Allocator, params: std.json.Value) !std.json.
 }
 ```
 
-### Building
+### Using the Method Dispatcher (Advanced)
 
-```bash
-# Build the library
-zig build
+For more control over request handling, use the dispatcher pattern:
 
-# Run tests
-zig build test
+```zig
+const std = @import("std");
+const mcp = @import("mcp");
 
-# Build release version
-zig build -Doptimize=ReleaseFast
+pub fn main() !void {
+    var gpa = std.heap.GeneralPurposeAllocator(.{}){};
+    defer _ = gpa.deinit();
+    const allocator = gpa.allocator();
+
+    // Create method registry
+    var registry = mcp.MethodRegistry.init(allocator);
+    defer registry.deinit();
+
+    // Register handlers
+    try registry.add("initialize", handleInitialize);
+    try registry.add("tools/list", handleToolsList);
+    try registry.add("tools/call", handleToolsCall);
+
+    // Set up lifecycle hooks
+    registry.setHooks(.{
+        .on_before = logRequest,
+        .on_error = logError,
+    });
+
+    // Get dispatcher and handle requests
+    const dispatcher = registry.asDispatcher();
+    
+    // Process incoming messages
+    while (try readNextMessage(allocator)) |message| {
+        defer allocator.free(message);
+        
+        var parsed = try mcp.parseRequest(allocator, message);
+        defer parsed.deinit();
+        
+        var ctx = mcp.DispatchContext.init(allocator, &parsed.request);
+        const result = try dispatcher.dispatch(&ctx);
+        
+        // Send response...
+    }
+}
+
+fn handleInitialize(ctx: *mcp.DispatchContext, _: ?std.json.Value) !mcp.DispatchResult {
+    return mcp.DispatchResult.jsonValue(mcp.InitializeResult{
+        .protocolVersion = mcp.PROTOCOL_VERSION,
+        .capabilities = .{ .tools = .{ .listChanged = true } },
+        .serverInfo = .{ .name = "my-server", .version = "1.0.0" },
+    });
+}
 ```
 
 ## Architecture
@@ -313,12 +395,26 @@ const transport = mcp.Transport.initFromFiles(stdin_file, stdout_file);
 const transport = mcp.Transport.initFromStream(stream);
 ```
 
-## Testing
-
-Run the unit test suite:
+## Building and Testing
 
 ```bash
+# Build the library and server
+zig build
+
+# Run unit tests
 zig build test
+
+# Run the MCP server (stdio mode)
+zig build run
+
+# Run the MCP server (TCP mode)
+zig build run -- --tcp --port 8080
+
+# Build release version
+zig build -Doptimize=ReleaseFast
+
+# Check code formatting
+zig fmt --check src/
 ```
 
 ### Integration Testing
@@ -326,9 +422,6 @@ zig build test
 The project includes a pure Zig test client for integration testing:
 
 ```bash
-# Build the test client
-zig build
-
 # Test stdio transport (spawns server automatically)
 zig build test-client -- --stdio
 
@@ -338,9 +431,23 @@ zig build run -- --tcp
 # In terminal 2:
 zig build test-client -- --tcp
 
+# Test with custom host/port
+zig build test-client -- --tcp --host 127.0.0.1 --port 8080
+
 # Show help
 zig build test-client -- --help
 ```
+
+### Continuous Integration
+
+This project uses GitHub Actions for CI/CD:
+
+- **Multi-platform**: Tests on Ubuntu, Windows, and macOS
+- **Zig 0.15.2**: Uses the latest stable Zig release
+- **Build & Test**: Runs `zig build` and `zig build test`
+- **Format Check**: Verifies code formatting with `zig fmt`
+
+See `.github/workflows/ci.yml` for the full configuration.
 
 ## Contributing
 
