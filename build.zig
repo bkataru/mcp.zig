@@ -5,7 +5,7 @@ pub fn build(b: *std.Build) void {
     const optimize = b.standardOptimizeOption(.{});
 
     // Create the library module - this is what external packages will import
-    const lib_mod = b.createModule(.{
+    const lib_mod = b.addModule("mcp", .{
         .root_source_file = b.path("src/lib.zig"),
         .target = target,
         .optimize = optimize,

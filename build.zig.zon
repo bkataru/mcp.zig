@@ -3,7 +3,7 @@
     .name = .mcp,
 
     // Semantic version for package deduplication
-    .version = "0.1.0",
+    .version = "0.1.1",
 
     // Minimum Zig version required
     .minimum_zig_version = "0.15.2",
