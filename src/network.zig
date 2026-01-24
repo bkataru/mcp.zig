@@ -89,8 +89,8 @@ pub const Network = struct {
         return switch (conn_type) {
             .stdio => Connection{
                 .conn_type = .stdio,
-                .reader = std.io.getStdIn().reader().any(),
-                .writer = std.io.getStdOut().writer().any(),
+                .reader = std.fs.File.stdin().reader().any(),
+                .writer = std.fs.File.stdout().writer().any(),
                 .stream = null,
                 .id = 0,
             },

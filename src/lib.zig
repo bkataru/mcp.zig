@@ -22,8 +22,8 @@
 //!     try registry.add("tools/call", handleToolsCall);
 //!
 //!     // Run server with Content-Length streaming
-//!     const stdin = std.io.getStdIn().reader();
-//!     const stdout = std.io.getStdOut().writer();
+//!     const stdin = std.fs.File.stdin().reader();
+//!     const stdout = std.fs.File.stdout().writer();
 //!     try mcp.runContentLengthServer(allocator, stdin, stdout, &registry);
 //! }
 //! ```
