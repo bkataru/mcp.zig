@@ -38,6 +38,27 @@ pub const FrameError = error{
 /// Maximum message size (16MB)
 pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
+/// Read a line from reader until delimiter (replacement for deprecated readUntilDelimiter)
+/// Returns the number of bytes read (excluding delimiter), or error
+fn readLineUntilDelimiter(reader: anytype, buffer: []u8, delimiter: u8) !usize {
+    var index: usize = 0;
+    while (index < buffer.len) {
+        const byte = reader.readByte() catch |err| {
+            if (err == error.EndOfStream) {
+                if (index > 0) return index;
+                return err;
+            }
+            return err;
+        };
+        if (byte == delimiter) {
+            return index;
+        }
+        buffer[index] = byte;
+        index += 1;
+    }
+    return error.StreamTooLong;
+}
+
 /// Read a Content-Length framed message from a reader
 /// Returns the message content (caller owns the memory)
 pub fn readContentLengthFrame(allocator: Allocator, reader: anytype) FrameError![]u8 {
@@ -46,9 +67,10 @@ pub fn readContentLengthFrame(allocator: Allocator, reader: anytype) FrameError!
 
     // Read headers until empty line
     while (true) {
-        const line = reader.readUntilDelimiter(&line_buf, '\n') catch |err| {
+        const line_len = readLineUntilDelimiter(reader, &line_buf, '\n') catch |err| {
             return if (err == error.EndOfStream) FrameError.EndOfStream else FrameError.InvalidHeader;
         };
+        const line = line_buf[0..line_len];
 
         // Strip \r if present
         const trimmed = std.mem.trimRight(u8, line, "\r");
