@@ -38,12 +38,21 @@ pub const FrameError = error{
 /// Maximum message size (16MB)
 pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
+/// Read a single byte from a reader (Zig 0.15.x compatible)
+/// Uses readSliceShort for the new std.Io.Reader API
+fn readSingleByte(reader: anytype) !u8 {
+    var buf: [1]u8 = undefined;
+    const n = try reader.readSliceShort(&buf);
+    if (n == 0) return error.EndOfStream;
+    return buf[0];
+}
+
 /// Read a line from reader until delimiter (replacement for deprecated readUntilDelimiter)
 /// Returns the number of bytes read (excluding delimiter), or error
 fn readLineUntilDelimiter(reader: anytype, buffer: []u8, delimiter: u8) !usize {
     var index: usize = 0;
     while (index < buffer.len) {
-        const byte = reader.readByte() catch |err| {
+        const byte = readSingleByte(reader) catch |err| {
             if (err == error.EndOfStream) {
                 if (index > 0) return index;
                 return err;
@@ -98,15 +107,11 @@ pub fn readContentLengthFrame(allocator: Allocator, reader: anytype) FrameError!
     const buffer = allocator.alloc(u8, length) catch return FrameError.OutOfMemory;
     errdefer allocator.free(buffer);
 
-    const bytes_read = reader.readAll(buffer) catch |err| {
+    // Use readSliceAll for Zig 0.15.x compatibility
+    reader.readSliceAll(buffer) catch |err| {
         allocator.free(buffer);
         return if (err == error.EndOfStream) FrameError.EndOfStream else FrameError.InvalidHeader;
     };
-
-    if (bytes_read != length) {
-        allocator.free(buffer);
-        return FrameError.EndOfStream;
-    }
 
     return buffer;
 }
@@ -124,7 +129,7 @@ pub fn readDelimiterFrame(allocator: Allocator, reader: anytype, delimiter: u8) 
     errdefer buffer.deinit(allocator);
 
     while (true) {
-        const byte = reader.readByte() catch |err| {
+        const byte = readSingleByte(reader) catch |err| {
             if (err == error.EndOfStream) {
                 if (buffer.items.len > 0) {
                     return buffer.toOwnedSlice(allocator);
