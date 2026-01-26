@@ -39,12 +39,11 @@ pub const FrameError = error{
 pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
 /// Read a single byte from a reader (Zig 0.15.x compatible)
-/// Uses readSliceShort for the new std.Io.Reader API
+/// Uses readByte for GenericReader API
 fn readSingleByte(reader: anytype) !u8 {
-    var buf: [1]u8 = undefined;
-    const n = try reader.readSliceShort(&buf);
-    if (n == 0) return error.EndOfStream;
-    return buf[0];
+    return reader.readByte() catch |err| {
+        return if (err == error.EndOfStream) error.EndOfStream else err;
+    };
 }
 
 /// Read a line from reader until delimiter (replacement for deprecated readUntilDelimiter)
@@ -107,8 +106,8 @@ pub fn readContentLengthFrame(allocator: Allocator, reader: anytype) FrameError!
     const buffer = allocator.alloc(u8, length) catch return FrameError.OutOfMemory;
     errdefer allocator.free(buffer);
 
-    // Use readSliceAll for Zig 0.15.x compatibility
-    reader.readSliceAll(buffer) catch |err| {
+    // Use readNoEof for Zig 0.15.x GenericReader API
+    reader.readNoEof(buffer) catch |err| {
         allocator.free(buffer);
         return if (err == error.EndOfStream) FrameError.EndOfStream else FrameError.InvalidHeader;
     };
