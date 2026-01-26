@@ -173,3 +173,135 @@ pub fn parseTransportMode(allocator: std.mem.Allocator) !TransportMode {
     }
     return .stdio; // Default to stdio for MCP compliance
 }
+
+// ==================== Tests ====================
+
+test "Transport initFromFiles creates correct IoSource types" {
+    const stdin = std.fs.File.stdin();
+    const stdout = std.fs.File.stdout();
+
+    const transport = Transport.initFromFiles(stdin, stdout);
+
+    // Verify read_source is a file
+    switch (transport.read_source) {
+        .file => {
+            // Expected: file source
+            try std.testing.expect(true);
+        },
+        .stream => {
+            return error.UnexpectedSourceType;
+        },
+    }
+
+    // Verify write_source is a file
+    switch (transport.write_source) {
+        .file => {
+            // Expected: file source
+            try std.testing.expect(true);
+        },
+        .stream => {
+            return error.UnexpectedSourceType;
+        },
+    }
+}
+
+test "Transport mutex is initialized unlocked" {
+    const stdin = std.fs.File.stdin();
+    const stdout = std.fs.File.stdout();
+
+    var transport = Transport.initFromFiles(stdin, stdout);
+
+    // Mutex should be acquirable (not locked)
+    transport.mutex.lock();
+    defer transport.mutex.unlock();
+
+    // If we get here, mutex was successfully acquired
+    try std.testing.expect(true);
+}
+
+test "StdioTransport init creates valid transport" {
+    const stdio = StdioTransport.init();
+
+    // Verify the underlying transport has file sources
+    switch (stdio.transport.read_source) {
+        .file => {
+            // Expected: StdioTransport uses file sources
+            try std.testing.expect(true);
+        },
+        .stream => {
+            return error.UnexpectedSourceType;
+        },
+    }
+
+    switch (stdio.transport.write_source) {
+        .file => {
+            try std.testing.expect(true);
+        },
+        .stream => {
+            return error.UnexpectedSourceType;
+        },
+    }
+}
+
+test "TransportMode enum has correct variants" {
+    // Test all enum variants exist
+    const stdio_mode = TransportMode.stdio;
+    const tcp_mode = TransportMode.tcp;
+
+    try std.testing.expect(stdio_mode != tcp_mode);
+    try std.testing.expectEqual(TransportMode.stdio, stdio_mode);
+    try std.testing.expectEqual(TransportMode.tcp, tcp_mode);
+}
+
+test "TransportMode can be used in switch" {
+    const modes = [_]TransportMode{ .stdio, .tcp };
+    var stdio_count: u32 = 0;
+    var tcp_count: u32 = 0;
+
+    for (modes) |mode| {
+        switch (mode) {
+            .stdio => stdio_count += 1,
+            .tcp => tcp_count += 1,
+        }
+    }
+
+    try std.testing.expectEqual(@as(u32, 1), stdio_count);
+    try std.testing.expectEqual(@as(u32, 1), tcp_count);
+}
+
+test "IoSource union tag detection" {
+    const stdin = std.fs.File.stdin();
+    const file_source = IoSource{ .file = stdin };
+
+    // Test that we can detect the active union tag
+    const is_file = switch (file_source) {
+        .file => true,
+        .stream => false,
+    };
+
+    try std.testing.expect(is_file);
+}
+
+test "Transport deinit does not panic" {
+    const stdin = std.fs.File.stdin();
+    const stdout = std.fs.File.stdout();
+
+    var transport = Transport.initFromFiles(stdin, stdout);
+
+    // deinit should complete without panicking
+    // (Transport doesn't own files, so nothing to clean up)
+    transport.deinit();
+
+    // If we reach here, deinit succeeded
+    try std.testing.expect(true);
+}
+
+test "StdioTransport deinit does not panic" {
+    var stdio = StdioTransport.init();
+
+    // deinit should complete without panicking
+    stdio.deinit();
+
+    // If we reach here, deinit succeeded
+    try std.testing.expect(true);
+}
