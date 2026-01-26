@@ -596,7 +596,7 @@ pub const Session = struct {
         var buffer = std.ArrayList(u8).init(self.allocator);
         defer buffer.deinit();
         try std.json.stringify(response, .{}, buffer.writer());
-        try self.connection.writer.writeAll(buffer.items);
+        try self.connection.writer().writeAll(buffer.items);
     }
 
     /// Handle shutdown request
@@ -615,7 +615,7 @@ pub const Session = struct {
         var buffer = std.ArrayList(u8).init(self.allocator);
         defer buffer.deinit();
         try std.json.stringify(response, .{}, buffer.writer());
-        try self.connection.writer.writeAll(buffer.items);
+        try self.connection.writer().writeAll(buffer.items);
     }
 
     /// Register a new tool with the session
@@ -691,3 +691,401 @@ pub const Session = struct {
         self.capabilities.deinit();
     }
 };
+
+// ==================== Tests ====================
+
+test "CancellationToken init creates non-cancelled state" {
+    var token = CancellationToken.init();
+    try std.testing.expect(!token.isCancelled());
+    try std.testing.expect(token.reason == null);
+}
+
+test "CancellationToken cancel sets cancelled state" {
+    var token = CancellationToken.init();
+    try std.testing.expect(!token.isCancelled());
+
+    token.cancel(null);
+    try std.testing.expect(token.isCancelled());
+}
+
+test "CancellationToken cancel with reason stores reason" {
+    var token = CancellationToken.init();
+    const reason = "User requested cancellation";
+    token.cancel(reason);
+
+    try std.testing.expect(token.isCancelled());
+    try std.testing.expectEqualStrings(reason, token.reason.?);
+}
+
+test "CancellationToken multiple cancel calls are idempotent" {
+    var token = CancellationToken.init();
+
+    token.cancel("First reason");
+    try std.testing.expect(token.isCancelled());
+
+    // Second cancel should still show cancelled (atomic is already true)
+    token.cancel("Second reason");
+    try std.testing.expect(token.isCancelled());
+    // Reason gets overwritten (last write wins)
+    try std.testing.expectEqualStrings("Second reason", token.reason.?);
+}
+
+test "MCPServer.init creates valid state with correct defaults" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    try std.testing.expectEqual(ServerState.created, server.state);
+    try std.testing.expectEqual(@as(usize, 0), server.tools.count());
+    try std.testing.expect(server.sampling_handler == null);
+    try std.testing.expect(server.request_context == null);
+    try std.testing.expectEqual(@as(usize, 0), server.active_requests.count());
+}
+
+test "MCPServer.deinit cleans up properly" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+
+    // Register a tool to ensure cleanup works
+    const test_handler = struct {
+        fn handler(_: std.mem.Allocator, _: std.json.Value) anyerror!std.json.Value {
+            return std.json.Value{ .string = "test" };
+        }
+    }.handler;
+
+    try server.registerTool(.{
+        .name = "test_tool",
+        .description = "A test tool",
+        .handler = test_handler,
+        .input_schema = "{\"type\":\"object\"}",
+    });
+
+    // deinit should clean up without leaks
+    server.deinit();
+
+    // If we reach here without memory leaks, the test passes
+}
+
+test "MCPServer.registerTool adds tool to registry" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const test_handler = struct {
+        fn handler(_: std.mem.Allocator, _: std.json.Value) anyerror!std.json.Value {
+            return std.json.Value{ .string = "result" };
+        }
+    }.handler;
+
+    try server.registerTool(.{
+        .name = "my_tool",
+        .description = "My test tool",
+        .handler = test_handler,
+    });
+
+    try std.testing.expectEqual(@as(usize, 1), server.tools.count());
+    const registered_tool = server.tools.get("my_tool");
+    try std.testing.expect(registered_tool != null);
+    try std.testing.expectEqualStrings("my_tool", registered_tool.?.name);
+    try std.testing.expectEqualStrings("My test tool", registered_tool.?.description);
+}
+
+test "MCPServer.registerTool rejects empty name" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const test_handler = struct {
+        fn handler(_: std.mem.Allocator, _: std.json.Value) anyerror!std.json.Value {
+            return std.json.Value{ .null = {} };
+        }
+    }.handler;
+
+    const result = server.registerTool(.{
+        .name = "",
+        .description = "Empty name tool",
+        .handler = test_handler,
+    });
+
+    try std.testing.expectError(error.InvalidToolName, result);
+}
+
+test "MCPServer.registerTool rejects empty description" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const test_handler = struct {
+        fn handler(_: std.mem.Allocator, _: std.json.Value) anyerror!std.json.Value {
+            return std.json.Value{ .null = {} };
+        }
+    }.handler;
+
+    const result = server.registerTool(.{
+        .name = "valid_name",
+        .description = "",
+        .handler = test_handler,
+    });
+
+    try std.testing.expectError(error.InvalidToolDescription, result);
+}
+
+test "MCPServer.handleRequest returns error for invalid JSON" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const response = try server.handleRequest("not valid json");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "error"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Invalid JSON"));
+}
+
+test "MCPServer.handleRequest returns error for non-object request" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const response = try server.handleRequest("\"just a string\"");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "error"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Request must be an object"));
+}
+
+test "MCPServer.handleRequest returns error for missing method" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const response = try server.handleRequest("{\"id\": 1}");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "error"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Method field missing"));
+}
+
+test "MCPServer.handleRequest returns error for method not found" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const response = try server.handleRequest("{\"method\": \"unknown_method\", \"id\": 1}");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "error"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Method not found"));
+}
+
+test "MCPServer.handleRequest handles initialize correctly" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const init_request =
+        \\{"method": "initialize", "id": 1, "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}
+    ;
+
+    const response = try server.handleRequest(init_request);
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "result"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "protocolVersion"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "capabilities"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "serverInfo"));
+    try std.testing.expectEqual(ServerState.ready, server.state);
+}
+
+test "MCPServer.handleRequest handles shutdown correctly" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const response = try server.handleRequest("{\"method\": \"shutdown\", \"id\": 1}");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "result"));
+    try std.testing.expectEqual(ServerState.shutdown, server.state);
+}
+
+test "MCPServer.handleRequest handles initialized notification" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const response = try server.handleRequest("{\"method\": \"initialized\"}");
+    defer allocator.free(response);
+
+    // Notifications return empty response
+    try std.testing.expectEqualStrings("", response);
+}
+
+test "MCPServer.handleRequest rejects tools/list before initialization" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    // Server is in 'created' state, not 'ready'
+    const response = try server.handleRequest("{\"method\": \"tools/list\", \"id\": 1}");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "error"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "Server not initialized"));
+}
+
+test "MCPServer.handleRequest handles tools/list after initialization" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    // Initialize the server first
+    const init_request =
+        \\{"method": "initialize", "id": 1, "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}
+    ;
+    const init_response = try server.handleRequest(init_request);
+    allocator.free(init_response);
+
+    // Now tools/list should work
+    const response = try server.handleRequest("{\"method\": \"tools/list\", \"id\": 2}");
+    defer allocator.free(response);
+
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "result"));
+    try std.testing.expect(std.mem.containsAtLeast(u8, response, 1, "tools"));
+}
+
+test "MCPServer request cancellation registration and lookup" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const request_id = jsonrpc.RequestId{ .integer = 42 };
+
+    // Register a request
+    const token = try server.registerRequest(request_id);
+    try std.testing.expect(!token.isCancelled());
+
+    // Check it's not cancelled
+    try std.testing.expect(!server.isRequestCancelled(request_id));
+
+    // Cancel it
+    const cancelled = try server.cancelRequest(request_id, "Test cancellation");
+    try std.testing.expect(cancelled);
+    try std.testing.expect(server.isRequestCancelled(request_id));
+
+    // Complete the request (cleanup)
+    server.completeRequest(request_id);
+    try std.testing.expect(!server.isRequestCancelled(request_id));
+}
+
+test "MCPServer cancelRequest returns false for unknown request" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const unknown_id = jsonrpc.RequestId{ .integer = 999 };
+    const cancelled = try server.cancelRequest(unknown_id, null);
+    try std.testing.expect(!cancelled);
+}
+
+test "MCPServer.setSamplingHandler registers handler" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    try std.testing.expect(server.sampling_handler == null);
+
+    const test_sampling_handler = struct {
+        fn handler(_: std.mem.Allocator, _: types.CreateMessageRequest) anyerror!types.CreateMessageResult {
+            return types.CreateMessageResult{
+                .role = "assistant",
+                .content = .{ .text = .{ .text = "Hello" } },
+                .model = "test-model",
+            };
+        }
+    }.handler;
+
+    server.setSamplingHandler(test_sampling_handler);
+    try std.testing.expect(server.sampling_handler != null);
+}
+
+test "MCPServer getRequestIdHash produces consistent hashes" {
+    // Test that integer IDs produce consistent hashes
+    const int_id1 = jsonrpc.RequestId{ .integer = 42 };
+    const int_id2 = jsonrpc.RequestId{ .integer = 42 };
+    const int_id3 = jsonrpc.RequestId{ .integer = 99 };
+
+    const hash1 = MCPServer.getRequestIdHash(int_id1);
+    const hash2 = MCPServer.getRequestIdHash(int_id2);
+    const hash3 = MCPServer.getRequestIdHash(int_id3);
+
+    try std.testing.expectEqual(hash1, hash2);
+    try std.testing.expect(hash1 != hash3);
+
+    // Test string IDs
+    const str_id1 = jsonrpc.RequestId{ .string = "request-1" };
+    const str_id2 = jsonrpc.RequestId{ .string = "request-1" };
+    const str_id3 = jsonrpc.RequestId{ .string = "request-2" };
+
+    const str_hash1 = MCPServer.getRequestIdHash(str_id1);
+    const str_hash2 = MCPServer.getRequestIdHash(str_id2);
+    const str_hash3 = MCPServer.getRequestIdHash(str_id3);
+
+    try std.testing.expectEqual(str_hash1, str_hash2);
+    try std.testing.expect(str_hash1 != str_hash3);
+}
+
+test "MCPServer multiple tool registration" {
+    const allocator = std.testing.allocator;
+
+    var server = try MCPServer.init(allocator);
+    defer server.deinit();
+
+    const test_handler = struct {
+        fn handler(_: std.mem.Allocator, _: std.json.Value) anyerror!std.json.Value {
+            return std.json.Value{ .string = "result" };
+        }
+    }.handler;
+
+    try server.registerTool(.{
+        .name = "tool1",
+        .description = "First tool",
+        .handler = test_handler,
+    });
+
+    try server.registerTool(.{
+        .name = "tool2",
+        .description = "Second tool",
+        .handler = test_handler,
+    });
+
+    try server.registerTool(.{
+        .name = "tool3",
+        .description = "Third tool",
+        .handler = test_handler,
+        .input_schema = "{\"type\":\"object\",\"properties\":{}}",
+    });
+
+    try std.testing.expectEqual(@as(usize, 3), server.tools.count());
+    try std.testing.expect(server.tools.get("tool1") != null);
+    try std.testing.expect(server.tools.get("tool2") != null);
+    try std.testing.expect(server.tools.get("tool3") != null);
+    try std.testing.expect(server.tools.get("nonexistent") == null);
+}
