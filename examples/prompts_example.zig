@@ -68,22 +68,26 @@ pub fn main() !void {
     std.debug.print("  - translate (text, target_language)\n", .{});
     std.debug.print("\nServer is ready. Waiting for MCP client connections...\n", .{});
 
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
+    const stdin_file = std.fs.File.stdin();
+    const stdout_file = std.fs.File.stdout();
+    var read_buf: [8192]u8 = undefined;
+    var write_buf: [8192]u8 = undefined;
+    var reader = stdin_file.reader(&read_buf);
+    var writer = stdout_file.writer(&write_buf);
 
     while (true) {
-        const message = try mcp.readContentLengthFrame(allocator, stdin) catch {
+        const message = mcp.readContentLengthFrame(allocator, &reader.interface) catch {
             break;
         };
         defer allocator.free(message);
 
         if (message.len == 0) continue;
 
-        const response = try handlePromptRequest(allocator, &prompts, message);
+        const response = handlePromptRequest(allocator, &prompts, message) catch continue;
         defer allocator.free(response);
 
         if (response.len > 0) {
-            try mcp.writeContentLengthFrame(stdout, response);
+            mcp.writeContentLengthFrame(&writer.interface, response) catch break;
         }
     }
 }

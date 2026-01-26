@@ -25,15 +25,19 @@ pub fn main() !void {
     try registerTools(&server);
     std.debug.print("Tools registered: echo, get_server_info, calculate\n", .{});
 
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
+    const stdin_file = std.fs.File.stdin();
+    const stdout_file = std.fs.File.stdout();
+    var read_buf: [8192]u8 = undefined;
+    var write_buf: [8192]u8 = undefined;
+    var reader = stdin_file.reader(&read_buf);
+    var writer = stdout_file.writer(&write_buf);
 
     var initialized = false;
     var running = true;
     std.debug.print("Server ready. Waiting for MCP client connections...\n", .{});
 
     while (running) {
-        const message = mcp.readContentLengthFrame(allocator, stdin) catch {
+        const message = mcp.readContentLengthFrame(allocator, &reader.interface) catch {
             break;
         };
         defer allocator.free(message);
@@ -42,15 +46,15 @@ pub fn main() !void {
 
         const response = processMessage(allocator, &server, message, &initialized, &running) catch |err| {
             std.debug.print("Error processing message: {any}\n", .{err});
-            const error_resp = try createErrorResponse(allocator, null, -32603, "Internal error");
+            const error_resp = createErrorResponse(allocator, null, -32603, "Internal error") catch continue;
             defer allocator.free(error_resp);
-            try mcp.writeContentLengthFrame(stdout, error_resp);
+            mcp.writeContentLengthFrame(&writer.interface, error_resp) catch continue;
             continue;
         };
         defer allocator.free(response);
 
         if (response.len > 0) {
-            try mcp.writeContentLengthFrame(stdout, response);
+            mcp.writeContentLengthFrame(&writer.interface, response) catch break;
         }
     }
 
