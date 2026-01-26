@@ -5,7 +5,7 @@
 
 /// Protocol Versions
 pub const JSON_RPC_VERSION = "2.0";
-pub const MCP_PROTOCOL_VERSION = "2025-11-25";
+pub const MCP_PROTOCOL_VERSION = "2024-11-05";
 pub const SERVER_VERSION = "1.0.0";
 
 /// Network Configuration
@@ -22,7 +22,7 @@ pub const SLEEP_INTERVAL_NS = 1 * std.time.ns_per_ms;
 
 /// Message Format Constants
 pub const INIT_REQUEST_TEMPLATE =
-    \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"clientInfo":{"name":"{s}","version":"1.0.0"}}}
+    \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"{s}","version":"1.0.0"}}}
 ;
 
 const std = @import("std");

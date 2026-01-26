@@ -111,7 +111,7 @@ fn testStdioTransport(allocator: std.mem.Allocator) !void {
     // Test 1: Initialize
     std.debug.print("Test 1: Initialize... ", .{});
     const init_result = try sendAndReceive(allocator, stdin, stdout,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"clientInfo":{"name":"zig-test-client","version":"1.0.0"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"zig-test-client","version":"1.0.0"}}}
     );
     defer allocator.free(init_result);
 
@@ -204,7 +204,7 @@ fn testTcpTransport(allocator: std.mem.Allocator, host: []const u8, port: u16) !
     // Test 1: Initialize
     std.debug.print("Test 1: Initialize... ", .{});
     const init_result = try sendAndReceiveTcp(allocator, stream,
-        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2025-11-25","capabilities":{"tools":{}},"clientInfo":{"name":"zig-tcp-client","version":"1.0.0"}}}
+        \\{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{"tools":{}},"clientInfo":{"name":"zig-tcp-client","version":"1.0.0"}}}
     );
     defer allocator.free(init_result);
 

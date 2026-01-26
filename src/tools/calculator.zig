@@ -1,6 +1,6 @@
 const std = @import("std");
 
-/// Calculator tool handler - enhanced for MCP 2025-11-25 protocol
+/// Calculator tool handler - enhanced for MCP 2024-11-05 protocol
 /// Handles basic arithmetic operations with improved error handling
 pub fn calculatorHandler(allocator: std.mem.Allocator, params: std.json.Value) anyerror!std.json.Value {
     if (params != .object) {

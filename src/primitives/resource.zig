@@ -69,13 +69,19 @@ pub const ResourceRegistry = struct {
     }
 
     /// List all resources
-    pub fn list(self: *@This()) []const Resource {
+    /// Returns an owned slice that must be freed by the caller using the registry's allocator
+    pub fn list(self: *@This()) []Resource {
         var result = std.ArrayListUnmanaged(Resource){};
         var it = self.resources.valueIterator();
         while (it.next()) |res| {
             result.append(self.allocator, res.*) catch continue;
         }
-        return result.items;
+        return result.toOwnedSlice(self.allocator) catch return &[_]Resource{};
+    }
+
+    /// Free a slice returned by list()
+    pub fn freeList(self: *@This(), slice: []Resource) void {
+        self.allocator.free(slice);
     }
 
     /// Count registered resources

@@ -894,7 +894,7 @@ test "MCPServer.handleRequest handles initialize correctly" {
     defer server.deinit();
 
     const init_request =
-        \\{"method": "initialize", "id": 1, "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}
+        \\{"method": "initialize", "id": 1, "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}
     ;
 
     const response = try server.handleRequest(init_request);
@@ -955,7 +955,7 @@ test "MCPServer.handleRequest handles tools/list after initialization" {
 
     // Initialize the server first
     const init_request =
-        \\{"method": "initialize", "id": 1, "params": {"protocolVersion": "2025-11-25", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}
+        \\{"method": "initialize", "id": 1, "params": {"protocolVersion": "2024-11-05", "capabilities": {}, "clientInfo": {"name": "test", "version": "1.0"}}}
     ;
     const init_response = try server.handleRequest(init_request);
     allocator.free(init_response);
