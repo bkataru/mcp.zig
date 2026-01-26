@@ -5,16 +5,20 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.0.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
-
-### Changed
-- **BREAKING:** Migrated from deprecated `std.io` APIs to new `std.Io` APIs (Zig 0.15.x compatibility)
-  - `streaming.zig`: Functions now use `GenericReader` API (`readByte`/`readNoEof`) instead of deprecated reader methods
-  - `network.zig`: Connection stores heap-allocated buffers with `reader()`/`writer()` methods
-  - `lib.zig`: Updated I/O type references for new API compatibility
+## [0.2.1] - 2026-01-26
 
 ### Fixed
-- `streaming.zig`: Use correct `GenericReader` API methods (`readByte`, `readNoEof`) for `fixedBufferStream().reader()`
+- **Protocol Version:** Corrected MCP protocol version from invalid `2025-11-25` to correct `2024-11-05`
+  - The invalid protocol version caused MCP clients to reject the server
+- **Memory Leak:** Fixed `ResourceRegistry.list()` returning dangling pointer
+  - Now returns an owned slice via `toOwnedSlice()` that callers must free
+  - Added `freeList()` method to properly free the slice returned by `list()`
+
+### Changed
+- Updated all test strings and templates to use correct protocol version `2024-11-05`
+
+### Added
+- Test coverage for `ResourceRegistry.list()` and `freeList()` methods
 
 ## [0.2.0] - 2026-01-24
 

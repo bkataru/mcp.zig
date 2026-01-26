@@ -385,8 +385,23 @@ test "ResourceRegistry list resources" {
     });
 
     const count = registry.count();
-
     try std.testing.expectEqual(@as(usize, 2), count);
+
+    // Test list() and freeList() - ensures no memory leaks
+    const resources = registry.list();
+    defer registry.freeList(resources);
+
+    try std.testing.expectEqual(@as(usize, 2), resources.len);
+
+    // Verify resources are in the list (order may vary due to hash map)
+    var found_test1 = false;
+    var found_test2 = false;
+    for (resources) |res| {
+        if (std.mem.eql(u8, res.uri, "file:///test1.txt")) found_test1 = true;
+        if (std.mem.eql(u8, res.uri, "file:///test2.txt")) found_test2 = true;
+    }
+    try std.testing.expect(found_test1);
+    try std.testing.expect(found_test2);
 }
 
 test "ResourceRegistry read resource" {
