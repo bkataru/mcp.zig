@@ -242,7 +242,7 @@ pub const ProgressTracker = struct {
     }
 
     /// Update progress and send notification synchronously
-    pub fn update(self: *@This(), progress: f64, message: ?[]const u8, writer: std.io.AnyWriter) !void {
+    pub fn update(self: *@This(), progress: f64, message: ?[]const u8, writer: *std.Io.Writer) !void {
         self.current_progress = progress;
 
         const elapsed_seconds = @as(f64, @floatFromInt(std.time.nanoTimestamp() - self.start_time)) / @as(f64, std.time.ns_per_s);
@@ -300,7 +300,7 @@ pub const ProgressTracker = struct {
     }
 
     /// Complete the operation and send final notification synchronously
-    pub fn complete(self: *@This(), writer: std.io.AnyWriter) !void {
+    pub fn complete(self: *@This(), writer: *std.Io.Writer) !void {
         var builder = ProgressBuilder.init(self.allocator);
         const notification = try builder.createProgressEnd(self.token);
         defer builder.freeNotification(notification);
@@ -405,9 +405,8 @@ test "ProgressToken from JSON" {
 
 test "ProgressTracker" {
     const allocator = std.testing.allocator;
-    var buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
-    defer buffer.deinit(allocator);
-    const writer = buffer.writer(allocator).any();
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
 
     const token = ProgressToken{ .integer = 1 };
     var tracker = ProgressTracker.init(allocator, token);
@@ -415,13 +414,13 @@ test "ProgressTracker" {
     try std.testing.expectEqual(@as(f64, 0.0), tracker.current_progress);
 
     // Update progress
-    _ = try tracker.update(0.25, "25% complete", writer);
+    try tracker.update(0.25, "25% complete", &writer);
     try std.testing.expectEqual(@as(f64, 0.25), tracker.current_progress);
 
     try std.testing.expectEqual(@as(f64, 25.0), tracker.getPercentage());
 
     // Complete
-    _ = try tracker.complete(writer);
+    try tracker.complete(&writer);
 }
 
 test "ProgressNotifier async delivery" {
@@ -473,20 +472,145 @@ test "ProgressNotifier async delivery" {
 
 test "ProgressNotifier sync fallback" {
     const allocator = std.testing.allocator;
-    var buffer = try std.ArrayList(u8).initCapacity(allocator, 1024);
-    defer buffer.deinit(allocator);
-    const writer = buffer.writer(allocator).any();
+    var buffer: [1024]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
 
     // Create tracker without notifier (should use sync delivery)
     const token = ProgressToken{ .string = "test-sync" };
     var tracker = ProgressTracker.init(allocator, token);
 
     // Update progress synchronously
-    try tracker.update(0.75, "75% complete", writer);
+    try tracker.update(0.75, "75% complete", &writer);
 
     // Verify notification was written to buffer
-    const output = buffer.items;
+    const output = writer.buffered();
     try std.testing.expect(std.mem.indexOf(u8, output, "notifications/progress") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "test-sync") != null);
     try std.testing.expect(std.mem.indexOf(u8, output, "0.75") != null);
+}
+
+// ==================== Writer API Tests ====================
+
+test "ProgressTracker.update with failing writer returns error" {
+    const allocator = std.testing.allocator;
+
+    // Use a failing writer that always returns WriteFailed
+    var writer: std.Io.Writer = .failing;
+
+    const token = ProgressToken{ .integer = 99 };
+    var tracker = ProgressTracker.init(allocator, token);
+
+    // update should propagate the writer error
+    const result = tracker.update(0.5, "test message", &writer);
+    try std.testing.expectError(error.WriteFailed, result);
+}
+
+test "ProgressTracker.complete with failing writer returns error" {
+    const allocator = std.testing.allocator;
+
+    // Use a failing writer that always returns WriteFailed
+    var writer: std.Io.Writer = .failing;
+
+    const token = ProgressToken{ .string = "complete-fail" };
+    var tracker = ProgressTracker.init(allocator, token);
+
+    // complete should propagate the writer error
+    const result = tracker.complete(&writer);
+    try std.testing.expectError(error.WriteFailed, result);
+}
+
+test "ProgressTracker percentage at 0% boundary" {
+    const allocator = std.testing.allocator;
+
+    const token = ProgressToken{ .integer = 1 };
+    var tracker = ProgressTracker.init(allocator, token);
+
+    // Initial state should be 0%
+    try std.testing.expectEqual(@as(f64, 0.0), tracker.current_progress);
+    try std.testing.expectEqual(@as(f64, 0.0), tracker.getPercentage());
+
+    // Explicitly set to 0 and verify
+    var buffer: [2048]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+    try tracker.update(0.0, "Starting", &writer);
+
+    try std.testing.expectEqual(@as(f64, 0.0), tracker.current_progress);
+    try std.testing.expectEqual(@as(f64, 0.0), tracker.getPercentage());
+}
+
+test "ProgressTracker percentage at 100% boundary" {
+    const allocator = std.testing.allocator;
+
+    const token = ProgressToken{ .integer = 2 };
+    var tracker = ProgressTracker.init(allocator, token);
+
+    var buffer: [2048]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    // Update to 100%
+    try tracker.update(1.0, "Complete", &writer);
+
+    try std.testing.expectEqual(@as(f64, 1.0), tracker.current_progress);
+    try std.testing.expectEqual(@as(f64, 100.0), tracker.getPercentage());
+}
+
+test "ProgressTracker multiple rapid updates" {
+    const allocator = std.testing.allocator;
+
+    const token = ProgressToken{ .string = "rapid-test" };
+    var tracker = ProgressTracker.init(allocator, token);
+
+    var buffer: [8192]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    // Perform multiple rapid updates
+    const progress_values = [_]f64{ 0.1, 0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.9, 1.0 };
+
+    for (progress_values) |progress| {
+        try tracker.update(progress, null, &writer);
+        try std.testing.expectEqual(progress, tracker.current_progress);
+    }
+
+    // Final state should be at 100%
+    try std.testing.expectEqual(@as(f64, 1.0), tracker.current_progress);
+    try std.testing.expectEqual(@as(f64, 100.0), tracker.getPercentage());
+
+    // Verify output contains progress data
+    const output = writer.buffered();
+    try std.testing.expect(output.len > 0);
+    try std.testing.expect(std.mem.indexOf(u8, output, "notifications/progress") != null);
+}
+
+test "ProgressTracker state transitions from init to complete" {
+    const allocator = std.testing.allocator;
+
+    const token = ProgressToken{ .integer = 42 };
+    var tracker = ProgressTracker.init(allocator, token);
+
+    var buffer: [4096]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    // Verify initial state
+    try std.testing.expectEqual(@as(f64, 0.0), tracker.current_progress);
+
+    // Transition through various states
+    try tracker.update(0.25, "Quarter done", &writer);
+    try std.testing.expectEqual(@as(f64, 0.25), tracker.current_progress);
+
+    try tracker.update(0.5, "Half done", &writer);
+    try std.testing.expectEqual(@as(f64, 0.5), tracker.current_progress);
+
+    try tracker.update(0.75, "Almost there", &writer);
+    try std.testing.expectEqual(@as(f64, 0.75), tracker.current_progress);
+
+    try tracker.update(1.0, "Finished", &writer);
+    try std.testing.expectEqual(@as(f64, 1.0), tracker.current_progress);
+
+    // Complete the tracker
+    try tracker.complete(&writer);
+
+    // Verify output contains both progress and progress_end notifications
+    const output = writer.buffered();
+    try std.testing.expect(std.mem.indexOf(u8, output, "notifications/progress") != null);
+    try std.testing.expect(std.mem.indexOf(u8, output, "notifications/progress/end") != null);
 }
