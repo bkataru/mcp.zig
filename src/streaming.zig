@@ -38,17 +38,17 @@ pub const FrameError = error{
 /// Maximum message size (16MB)
 pub const MAX_MESSAGE_SIZE: usize = 16 * 1024 * 1024;
 
-/// Read a single byte from a reader (Zig 0.15.x compatible)
-/// Uses readByte for GenericReader API
-fn readSingleByte(reader: anytype) !u8 {
-    return reader.readByte() catch |err| {
-        return if (err == error.EndOfStream) error.EndOfStream else err;
+/// Read a single byte from a reader (Zig 0.15.x std.Io.Reader API)
+fn readSingleByte(reader: *std.Io.Reader) !u8 {
+    const bytes = reader.take(1) catch |err| {
+        return if (err == error.ReadFailed) error.EndOfStream else err;
     };
+    return bytes[0];
 }
 
 /// Read a line from reader until delimiter (replacement for deprecated readUntilDelimiter)
 /// Returns the number of bytes read (excluding delimiter), or error
-fn readLineUntilDelimiter(reader: anytype, buffer: []u8, delimiter: u8) !usize {
+fn readLineUntilDelimiter(reader: *std.Io.Reader, buffer: []u8, delimiter: u8) !usize {
     var index: usize = 0;
     while (index < buffer.len) {
         const byte = readSingleByte(reader) catch |err| {
@@ -69,7 +69,7 @@ fn readLineUntilDelimiter(reader: anytype, buffer: []u8, delimiter: u8) !usize {
 
 /// Read a Content-Length framed message from a reader
 /// Returns the message content (caller owns the memory)
-pub fn readContentLengthFrame(allocator: Allocator, reader: anytype) FrameError![]u8 {
+pub fn readContentLengthFrame(allocator: Allocator, reader: *std.Io.Reader) FrameError![]u8 {
     var content_length: ?usize = null;
     var line_buf: [1024]u8 = undefined;
 
@@ -106,9 +106,8 @@ pub fn readContentLengthFrame(allocator: Allocator, reader: anytype) FrameError!
     const buffer = allocator.alloc(u8, length) catch return FrameError.OutOfMemory;
     errdefer allocator.free(buffer);
 
-    // Use readNoEof for Zig 0.15.x GenericReader API
-    reader.readNoEof(buffer) catch |err| {
-        allocator.free(buffer);
+    // Use readSliceAll for std.Io.Reader API
+    reader.readSliceAll(buffer) catch |err| {
         return if (err == error.EndOfStream) FrameError.EndOfStream else FrameError.InvalidHeader;
     };
 
@@ -116,14 +115,14 @@ pub fn readContentLengthFrame(allocator: Allocator, reader: anytype) FrameError!
 }
 
 /// Write a Content-Length framed message to a writer
-pub fn writeContentLengthFrame(writer: anytype, message: []const u8) !void {
+pub fn writeContentLengthFrame(writer: *std.Io.Writer, message: []const u8) !void {
     try writer.print("Content-Length: {d}\r\n\r\n", .{message.len});
     try writer.writeAll(message);
 }
 
 /// Read a delimiter-framed message from a reader
 /// Returns the message content (caller owns the memory)
-pub fn readDelimiterFrame(allocator: Allocator, reader: anytype, delimiter: u8) ![]u8 {
+pub fn readDelimiterFrame(allocator: Allocator, reader: *std.Io.Reader, delimiter: u8) ![]u8 {
     var buffer = std.ArrayListUnmanaged(u8){};
     errdefer buffer.deinit(allocator);
 
@@ -153,7 +152,7 @@ pub fn readDelimiterFrame(allocator: Allocator, reader: anytype, delimiter: u8) 
 }
 
 /// Write a delimiter-framed message to a writer
-pub fn writeDelimiterFrame(writer: anytype, message: []const u8, delimiter: u8) !void {
+pub fn writeDelimiterFrame(writer: *std.Io.Writer, message: []const u8, delimiter: u8) !void {
     try writer.writeAll(message);
     try writer.writeByte(delimiter);
 }
@@ -162,10 +161,9 @@ pub fn writeDelimiterFrame(writer: anytype, message: []const u8, delimiter: u8) 
 
 test "readContentLengthFrame parses valid message" {
     const input = "Content-Length: 13\r\n\r\n{\"test\":true}";
-    var stream = std.io.fixedBufferStream(input);
-    const reader = stream.reader();
+    var reader = std.Io.Reader.fixed(input);
 
-    const message = try readContentLengthFrame(std.testing.allocator, reader);
+    const message = try readContentLengthFrame(std.testing.allocator, &reader);
     defer std.testing.allocator.free(message);
 
     try std.testing.expectEqualStrings("{\"test\":true}", message);
@@ -173,30 +171,27 @@ test "readContentLengthFrame parses valid message" {
 
 test "readContentLengthFrame handles missing header" {
     const input = "\r\n{\"test\":true}";
-    var stream = std.io.fixedBufferStream(input);
-    const reader = stream.reader();
+    var reader = std.Io.Reader.fixed(input);
 
-    const result = readContentLengthFrame(std.testing.allocator, reader);
+    const result = readContentLengthFrame(std.testing.allocator, &reader);
     try std.testing.expectError(FrameError.MissingContentLength, result);
 }
 
 test "writeContentLengthFrame produces valid output" {
     var buffer: [256]u8 = undefined;
-    var stream = std.io.fixedBufferStream(&buffer);
-    const writer = stream.writer();
+    var writer = std.Io.Writer.fixed(&buffer);
 
-    try writeContentLengthFrame(writer, "{\"id\":1}");
+    try writeContentLengthFrame(&writer, "{\"id\":1}");
 
-    const written = stream.getWritten();
+    const written = writer.buffered();
     try std.testing.expectEqualStrings("Content-Length: 8\r\n\r\n{\"id\":1}", written);
 }
 
 test "readDelimiterFrame parses newline-delimited message" {
     const input = "{\"test\":true}\n{\"next\":1}";
-    var stream = std.io.fixedBufferStream(input);
-    const reader = stream.reader();
+    var reader = std.Io.Reader.fixed(input);
 
-    const message = try readDelimiterFrame(std.testing.allocator, reader, '\n');
+    const message = try readDelimiterFrame(std.testing.allocator, &reader, '\n');
     defer std.testing.allocator.free(message);
 
     try std.testing.expectEqualStrings("{\"test\":true}", message);
@@ -252,7 +247,7 @@ pub const StreamingResponse = struct {
     }
 
     /// Stream chunks to a writer
-    pub fn streamTo(self: *@This(), writer: std.io.AnyWriter) !void {
+    pub fn streamTo(self: *@This(), writer: *std.Io.Writer) !void {
         for (self.chunks.items) |chunk| {
             try writer.writeAll(chunk);
         }
@@ -290,7 +285,7 @@ pub const BatchedWriter = struct {
     }
 
     /// Write all responses as a JSON array
-    pub fn writeBatch(self: *@This(), writer: std.io.AnyWriter) !void {
+    pub fn writeBatch(self: *@This(), writer: *std.Io.Writer) !void {
         try writer.writeAll("[");
         for (self.responses.items, 0..) |response, i| {
             if (i > 0) {
@@ -302,7 +297,7 @@ pub const BatchedWriter = struct {
     }
 
     /// Write all responses individually with Content-Length framing
-    pub fn writeBatchFramed(self: *@This(), writer: std.io.AnyWriter) !void {
+    pub fn writeBatchFramed(self: *@This(), writer: *std.Io.Writer) !void {
         for (self.responses.items) |response| {
             try writeContentLengthFrame(writer, response);
         }
@@ -335,4 +330,150 @@ test "BatchedWriter" {
     try batch.addResponse("{\"id\":2,\"result\":\"done\"}");
 
     try std.testing.expectEqual(@as(usize, 2), batch.count());
+}
+
+// ==================== Edge Case Tests ====================
+
+test "readSingleByte with empty buffer returns EndOfStream" {
+    var reader = std.Io.Reader.fixed("");
+
+    const result = readSingleByte(&reader);
+    try std.testing.expectError(error.EndOfStream, result);
+}
+
+test "readLineUntilDelimiter with buffer overflow returns StreamTooLong" {
+    const input = "this is a very long line without delimiter";
+    var reader = std.Io.Reader.fixed(input);
+
+    var small_buffer: [5]u8 = undefined;
+    const result = readLineUntilDelimiter(&reader, &small_buffer, '\n');
+    try std.testing.expectError(error.StreamTooLong, result);
+}
+
+test "readContentLengthFrame with invalid content-length returns InvalidContentLength" {
+    const input = "Content-Length: not-a-number\r\n\r\n{\"test\":true}";
+    var reader = std.Io.Reader.fixed(input);
+
+    const result = readContentLengthFrame(std.testing.allocator, &reader);
+    try std.testing.expectError(FrameError.InvalidContentLength, result);
+}
+
+test "readContentLengthFrame with negative content-length returns InvalidContentLength" {
+    const input = "Content-Length: -5\r\n\r\n{\"test\":true}";
+    var reader = std.Io.Reader.fixed(input);
+
+    const result = readContentLengthFrame(std.testing.allocator, &reader);
+    try std.testing.expectError(FrameError.InvalidContentLength, result);
+}
+
+test "writeBatch with empty batch writes empty array" {
+    const allocator = std.testing.allocator;
+    var batch = BatchedWriter.init(allocator);
+    defer batch.deinit();
+
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    try batch.writeBatch(&writer);
+
+    const written = writer.buffered();
+    try std.testing.expectEqualStrings("[]", written);
+}
+
+test "StreamingResponse.streamTo writes all chunks to writer" {
+    const allocator = std.testing.allocator;
+    var streaming = StreamingResponse.init(allocator);
+    defer streaming.deinit();
+
+    try streaming.addChunk("hello");
+    try streaming.addChunk(" ");
+    try streaming.addChunk("world");
+
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    try streaming.streamTo(&writer);
+
+    const written = writer.buffered();
+    try std.testing.expectEqualStrings("hello world", written);
+}
+
+test "StreamingResponse.streamTo with empty chunks" {
+    const allocator = std.testing.allocator;
+    var streaming = StreamingResponse.init(allocator);
+    defer streaming.deinit();
+
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    try streaming.streamTo(&writer);
+
+    const written = writer.buffered();
+    try std.testing.expectEqualStrings("", written);
+}
+
+test "writeDelimiterFrame with empty message writes only delimiter" {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    try writeDelimiterFrame(&writer, "", '\n');
+
+    const written = writer.buffered();
+    try std.testing.expectEqualStrings("\n", written);
+}
+
+test "writeDelimiterFrame with custom delimiter" {
+    var buffer: [256]u8 = undefined;
+    var writer = std.Io.Writer.fixed(&buffer);
+
+    try writeDelimiterFrame(&writer, "test", 0);
+
+    const written = writer.buffered();
+    try std.testing.expectEqual(@as(usize, 5), written.len);
+    try std.testing.expectEqualStrings("test", written[0..4]);
+    try std.testing.expectEqual(@as(u8, 0), written[4]);
+}
+
+test "readContentLengthFrame with message too large returns MessageTooLarge" {
+    // Construct a header with content-length exceeding MAX_MESSAGE_SIZE
+    const input = "Content-Length: 17000000\r\n\r\n";
+    var reader = std.Io.Reader.fixed(input);
+
+    const result = readContentLengthFrame(std.testing.allocator, &reader);
+    try std.testing.expectError(FrameError.MessageTooLarge, result);
+}
+
+test "readContentLengthFrame with truncated body returns EndOfStream" {
+    // Header says 20 bytes but only 5 are provided
+    const input = "Content-Length: 20\r\n\r\nhello";
+    var reader = std.Io.Reader.fixed(input);
+
+    const result = readContentLengthFrame(std.testing.allocator, &reader);
+    try std.testing.expectError(FrameError.EndOfStream, result);
+}
+
+test "readDelimiterFrame with empty input returns EndOfStream" {
+    var reader = std.Io.Reader.fixed("");
+
+    const result = readDelimiterFrame(std.testing.allocator, &reader, '\n');
+    try std.testing.expectError(error.EndOfStream, result);
+}
+
+test "readLineUntilDelimiter with empty input returns EndOfStream" {
+    var reader = std.Io.Reader.fixed("");
+
+    var buffer: [10]u8 = undefined;
+    const result = readLineUntilDelimiter(&reader, &buffer, '\n');
+    try std.testing.expectError(error.EndOfStream, result);
+}
+
+test "readLineUntilDelimiter returns partial content without delimiter at EOF" {
+    const input = "partial";
+    var reader = std.Io.Reader.fixed(input);
+
+    var buffer: [20]u8 = undefined;
+    const len = try readLineUntilDelimiter(&reader, &buffer, '\n');
+
+    try std.testing.expectEqual(@as(usize, 7), len);
+    try std.testing.expectEqualStrings("partial", buffer[0..len]);
 }
