@@ -5,26 +5,53 @@
 //!
 //! ## Quick Start
 //!
+//! Using the high-level `MCPServer`:
+//!
 //! ```zig
+//! const std = @import("std");
 //! const mcp = @import("mcp");
+//!
+//! fn myToolHandler(allocator: std.mem.Allocator, params: std.json.Value) !std.json.Value {
+//!     _ = params;
+//!     return std.json.Value{ .string = try allocator.dupe(u8, "Hello from tool!") };
+//! }
 //!
 //! pub fn main() !void {
 //!     var gpa = std.heap.GeneralPurposeAllocator(.{}){};
 //!     defer _ = gpa.deinit();
 //!     const allocator = gpa.allocator();
 //!
-//!     var registry = mcp.MethodRegistry.init(allocator);
-//!     defer registry.deinit();
+//!     // Create MCP server
+//!     var server = try mcp.MCPServer.init(allocator);
+//!     defer server.deinit();
 //!
-//!     // Register handlers
-//!     try registry.add("initialize", handleInitialize);
-//!     try registry.add("tools/list", handleToolsList);
-//!     try registry.add("tools/call", handleToolsCall);
+//!     // Register tools
+//!     try server.registerTool(.{
+//!         .name = "my_tool",
+//!         .description = "A simple tool example",
+//!         .handler = myToolHandler,
+//!     });
 //!
-//!     // Run server with Content-Length streaming
-//!     const stdin = std.fs.File.stdin().reader();
-//!     const stdout = std.fs.File.stdout().writer();
-//!     try mcp.runContentLengthServer(allocator, stdin, stdout, &registry);
+//!     // Process requests using Content-Length framing (Zig 0.15.x std.Io API)
+//!     var read_buf: [8192]u8 = undefined;
+//!     var write_buf: [8192]u8 = undefined;
+//!     const stdin = std.fs.File.stdin();
+//!     const stdout = std.fs.File.stdout();
+//!     var reader = stdin.reader(&read_buf);
+//!     var writer = stdout.writer(&write_buf);
+//!
+//!     while (true) {
+//!         const frame = mcp.readContentLengthFrame(allocator, &reader.interface) catch break;
+//!         defer allocator.free(frame);
+//!
+//!         const response = try server.handleRequest(frame);
+//!         defer allocator.free(response);
+//!
+//!         if (response.len > 0) {
+//!             try mcp.writeContentLengthFrame(&writer.interface, response);
+//!             try writer.interface.flush();
+//!         }
+//!     }
 //! }
 //! ```
 

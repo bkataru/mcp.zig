@@ -179,12 +179,18 @@ pub fn main() !void {
         .handler = greetHandler,
     });
 
-    // Run the server
-    const stdin = std.io.getStdIn().reader();
-    const stdout = std.io.getStdOut().writer();
+    // Run the server with stdio transport (Zig 0.15 API)
+    const stdin = std.fs.File.stdin();
+    const stdout = std.fs.File.stdout();
+
+    // Create buffered readers/writers
+    var read_buf: [8192]u8 = undefined;
+    var write_buf: [8192]u8 = undefined;
+    var reader = stdin.reader(&read_buf);
+    var writer = stdout.writer(&write_buf);
 
     while (true) {
-        const message = mcp.readContentLengthFrame(allocator, stdin) catch {
+        const message = mcp.readContentLengthFrame(allocator, &reader.interface) catch {
             break;
         };
         defer allocator.free(message);
@@ -195,7 +201,8 @@ pub fn main() !void {
         defer allocator.free(response);
 
         if (response.len > 0) {
-            try mcp.writeContentLengthFrame(stdout, response);
+            try mcp.writeContentLengthFrame(&writer.interface, response);
+            try writer.interface.flush();
         }
     }
 }
@@ -366,15 +373,22 @@ const result = try dispatcher.dispatch(&context);
 Content-Length message framing (standard for MCP/LSP protocols):
 
 ```zig
+// Create buffered reader/writer with the new Zig 0.15 Io API
+var read_buf: [8192]u8 = undefined;
+var write_buf: [8192]u8 = undefined;
+var reader = file.reader(&read_buf);
+var writer = file.writer(&write_buf);
+
 // Read a Content-Length framed message
-const message = try mcp.readContentLengthFrame(allocator, reader);
+const message = try mcp.readContentLengthFrame(allocator, &reader.interface);
 defer allocator.free(message);
 
 // Write a Content-Length framed message
-try mcp.writeContentLengthFrame(writer, response);
+try mcp.writeContentLengthFrame(&writer.interface, response);
+try writer.interface.flush();
 
 // Or use delimiter-based framing (e.g., newline)
-const line = try mcp.readDelimiterFrame(allocator, reader, '\n');
+const line = try mcp.readDelimiterFrame(allocator, &reader.interface, '\n');
 ```
 
 ### JSON-RPC (`mcp.jsonrpc`)
@@ -466,9 +480,14 @@ const notification = try builder.createProgress(
     60.0,
 );
 
+// Use with a buffered writer (Zig 0.15 API)
+var write_buf: [8192]u8 = undefined;
+var file_writer = file.writer(&write_buf);
+
 var tracker = mcp.progress.ProgressTracker.init(allocator, .{ .integer = 1 });
-try tracker.update(0.25, "25% complete", writer.any());
-try tracker.complete(writer.any());
+try tracker.update(0.25, "25% complete", &file_writer.interface);
+try tracker.complete(&file_writer.interface);
+try file_writer.interface.flush();
 ```
 
 ### Logging (`mcp.logger`)
@@ -500,10 +519,12 @@ logger.stop("Server stopped");
 Abstraction for stdio and TCP transports:
 
 ```zig
-// Stdio transport
-const transport = mcp.Transport.initFromFiles(stdin_file, stdout_file);
+// Stdio transport (using std.fs.File.stdin/stdout)
+const stdin = std.fs.File.stdin();
+const stdout = std.fs.File.stdout();
+const transport = mcp.Transport.initFromFiles(stdin, stdout);
 
-// TCP transport
+// TCP transport (using std.net.Stream)
 const transport = mcp.Transport.initFromStream(stream);
 ```
 
